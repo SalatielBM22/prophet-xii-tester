@@ -59,3 +59,36 @@ fn native_callback_has_no_allocations_including_control_and_telemetry() {
     assert_eq!(COUNT.with(|v| v.get()), 0);
     assert!(out.iter().all(|v| v.is_finite()));
 }
+#[test]
+fn capture_bypass_learn_and_snapshot_paths_allocate_nothing() {
+    let (mut tx, rx) = rtrb::RingBuffer::new(512);
+    let (tt, mut tr) = rtrb::RingBuffer::new(4);
+    let (ct, mut cr) = rtrb::RingBuffer::new(4);
+    let mut p = AudioProcessor::new(48000., rx, tt, Arc::new(AtomicU64::new(0)));
+    p.attach_capture(ct);
+    let mut out = [0f32; 512];
+    tx.push(Command::Learn(23)).unwrap();
+    tx.push(Command::Midi {
+        status: 0xb0,
+        data1: 16,
+        data2: 64,
+    })
+    .unwrap();
+    tx.push(Command::CancelLearn).unwrap();
+    tx.push(Command::Remap { cc: 17, id: 23 }).unwrap();
+    tx.push(Command::Unlearn(23)).unwrap();
+    tx.push(Command::ReverbBypass {
+        enabled: false,
+        tail: prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Kill,
+    })
+    .unwrap();
+    COUNT.with(|c| c.set(0));
+    ENABLED.with(|v| v.set(true));
+    for _ in 0..40 {
+        p.process(&mut out, 2);
+        while tr.pop().is_ok() {}
+        while cr.pop().is_ok() {}
+    }
+    ENABLED.with(|v| v.set(false));
+    assert_eq!(COUNT.with(Cell::get), 0);
+}
