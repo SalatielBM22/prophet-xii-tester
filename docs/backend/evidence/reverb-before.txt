@@ -1,0 +1,31 @@
+warning: unused field `authors` in `workspace.package`
+  --> Cargo.toml:17:1
+   |
+17 | authors = ["PROPHET-XII DSP Engineering Team"]
+   | ^^^^^^^
+   |
+   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default
+help: consider removing the field `workspace.package.authors`
+warning: workspace (manifest) generated 1 warning
+   Compiling prophet-dsp v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-dsp)
+    Finished `release` profile [optimized] target(s) in 4.57s
+     Running tests/reverb_regression.rs (target/release/build/prophet-dsp/bc366318b08066bc/out/reverb_regression-bc366318b08066bc)
+
+running 1 test
+test zero_wet_must_not_suspend_a_stale_tail ... FAILED
+
+failures:
+
+---- zero_wet_must_not_suspend_a_stale_tail stdout ----
+
+thread 'zero_wet_must_not_suspend_a_stale_tail' (8506) panicked at crates/prophet-dsp/tests/reverb_regression.rs:10:2:
+old tail resumed: 0.0027947356
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    zero_wet_must_not_suspend_a_stale_tail
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p prophet-dsp --test reverb_regression`

@@ -1,0 +1,23 @@
+warning: unused field `authors` in `workspace.package`
+  --> Cargo.toml:17:1
+   |
+17 | authors = ["PROPHET-XII DSP Engineering Team"]
+   | ^^^^^^^
+   |
+   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default
+help: consider removing the field `workspace.package.authors`
+warning: workspace (manifest) generated 1 warning
+   Compiling prophet-dsp v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-dsp)
+    Finished `release` profile [optimized] target(s) in 4.44s
+     Running tests/reverb_regression.rs (target/release/build/prophet-dsp/bc366318b08066bc/out/reverb_regression-bc366318b08066bc)
+
+running 6 tests
+test kill_fades_dry_gain_and_accepts_new_audio_without_old_history ... ok
+test bypass_kill_spill_and_reenable_are_explicit ... ok
+test wet_dry_law_is_affine_for_the_same_tank ... ok
+test zero_wet_must_not_suspend_a_stale_tail ... ok
+test reset_invalidates_every_delay_and_restores_rng ... ok
+test ensemble_shimmer_sensitivity_and_freeze_are_finite ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+

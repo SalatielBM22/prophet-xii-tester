@@ -27,9 +27,15 @@ pub enum EnsembleMode {
     Forte,      // forte: rich polyphonic string orchestra synthesis
 }
 
+/// Spill renders remaining tails; Kill fades them before invalidating history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReverbTailPolicy { Spill, Kill }
+
 /// Parameters for the Solaris-Cloudburst Hybrid Reverb.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SolarisReverbParams {
+    pub enabled: bool,
+    pub bypass_tail: ReverbTailPolicy,
     pub pre_delay_ms: f32,
     pub cascade_diffusion: f32,
     pub ensemble_mode: EnsembleMode,
@@ -56,6 +62,8 @@ pub struct SolarisReverbParams {
 impl Default for SolarisReverbParams {
     fn default() -> Self {
         Self {
+            enabled: true,
+            bypass_tail: ReverbTailPolicy::Spill,
             pre_delay_ms: 28.0,
             cascade_diffusion: 0.72,
             ensemble_mode: EnsembleMode::MezzoPiano,
@@ -123,8 +131,8 @@ impl EnsembleBandChannel {
         let v3 = input - self.ic2eq;
         let v1 = a1 * self.ic1eq + a2 * v3;
         let v2 = self.ic2eq + self.g * v1;
-        self.ic1eq = 2.0 * v1 - self.ic1eq;
-        self.ic2eq = 2.0 * v2 - self.ic2eq;
+        self.ic1eq = flush_tiny(2.0 * v1 - self.ic1eq);
+        self.ic2eq = flush_tiny(2.0 * v2 - self.ic2eq);
         let bp = v1 * self.k_inv_q;
 
         // 2. Dynamic Envelope Follower (15 ms attack, 120 ms release)
@@ -135,6 +143,7 @@ impl EnsembleBandChannel {
             self.env += (rect - self.env) * rel_coeff;
         }
 
+        self.env = flush_tiny(self.env);
         // 3. Harmonic Partial Synthesis (2nd and 3rd harmonics with Solina 3-phase modulation)
         let freq_mod = 1.0 + 0.0035 * solina_mod_slow + 0.0012 * solina_mod_fast;
         self.phase_h2 = (self.phase_h2 + self.dt_h2 * freq_mod).rem_euclid(1.0);
@@ -173,6 +182,7 @@ pub struct GranularPitchShifter {
     write_pos: usize,
     phasor: f32,
     grain_size: f32,
+    filled: u64,
 }
 
 impl GranularPitchShifter {
@@ -182,6 +192,7 @@ impl GranularPitchShifter {
             write_pos: 0,
             phasor: 0.0,
             grain_size: 2048.0,
+            filled: 0,
         }
     }
 
@@ -193,14 +204,17 @@ impl GranularPitchShifter {
         let mask = SHIMMER_BUF_LEN - 1;
         let idx0 = (self.write_pos + SHIMMER_BUF_LEN - d_int) & mask;
         let idx1 = (idx0 + SHIMMER_BUF_LEN - 1) & mask;
-        self.buf[idx0] * (1.0 - frac) + self.buf[idx1] * frac
+        let a = if self.filled >= d_int as u64 { self.buf[idx0] } else { 0.0 };
+        let b = if self.filled > d_int as u64 { self.buf[idx1] } else { 0.0 };
+        a * (1.0 - frac) + b * frac
     }
 
     /// Pitch-shifts `input` by `pitch_ratio` (e.g. `2.0` for +12 st, `1.4983` for +7 st).
     #[inline(always)]
     pub fn process(&mut self, input: f32, pitch_ratio: f32) -> f32 {
-        self.buf[self.write_pos] = input;
+        self.buf[self.write_pos] = flush_tiny(input);
         self.write_pos = (self.write_pos + 1) & (SHIMMER_BUF_LEN - 1);
+        self.filled = self.filled.saturating_add(1);
 
         let rate = (1.0 - pitch_ratio) / self.grain_size;
         self.phasor = (self.phasor + rate).rem_euclid(1.0);
@@ -269,8 +283,8 @@ impl SolarisVowelFilter {
             let v3 = input - self.ic2[f_idx];
             let v1 = a1 * self.ic1[f_idx] + a2 * v3;
             let v2 = self.ic2[f_idx] + g * v1;
-            self.ic1[f_idx] = 2.0 * v1 - self.ic1[f_idx];
-            self.ic2[f_idx] = 2.0 * v2 - self.ic2[f_idx];
+            self.ic1[f_idx] = flush_tiny(2.0 * v1 - self.ic1[f_idx]);
+            self.ic2[f_idx] = flush_tiny(2.0 * v2 - self.ic2[f_idx]);
             sum += (v1 * k) * gains[f_idx];
         }
         sum / 1.85
@@ -353,6 +367,9 @@ pub struct SolarisCloudburstReverb {
     sample_counter: u64,
     cached_params: Option<[f32; 3]>,
     coefficients: [f32; 10],
+    enable_gain: f32,
+    quiet_samples: usize,
+    dormant: bool,
 }
 
 impl SolarisCloudburstReverb {
@@ -392,27 +409,36 @@ impl SolarisCloudburstReverb {
             sample_counter: 0,
             cached_params: None,
             coefficients: [0.0; 10],
+            enable_gain: 1.0,
+            quiet_samples: 0,
+            dormant: true,
         };
         rev.set_sample_rate(sr);
         rev
     }
 
     pub fn reset(&mut self) {
-        self.predelay_buf.fill(0.0);
-        for b in &mut self.cascade_bufs {
-            b.fill(0.0);
-        }
-        for b in &mut self.fdn_bufs {
-            b.fill(0.0);
-        }
+        self.clear_history();
+        self.set_sample_rate(self.sample_rate);
+    }
+
+    pub fn is_dormant(&self) -> bool { self.dormant }
+    pub fn enable_gain(&self) -> f32 { self.enable_gain }
+
+    fn clear_history(&mut self) {
+        // Read guards invalidate old storage until overwritten. No 1.7 MB
+        // memset, allocation or delay-history scan in the callback.
         self.predelay_pos = 0;
         self.cascade_pos = [0; 4];
         self.fdn_write_pos = 0;
         self.fdn_lp_states = [0.0; 8];
         self.fdn_hp_states = [0.0; 8];
         self.ensemble_bands = [EnsembleBandChannel::default(); 48];
-        self.shimmer_oct = GranularPitchShifter::new();
-        self.shimmer_fifth = GranularPitchShifter::new();
+        for shifter in [&mut self.shimmer_oct, &mut self.shimmer_fifth] {
+            shifter.write_pos = 0;
+            shifter.phasor = 0.0;
+            shifter.filled = 0;
+        }
         self.vowel_l = SolarisVowelFilter::default();
         self.vowel_r = SolarisVowelFilter::default();
         self.vowel_feedback = [SolarisVowelFilter::default(); 8];
@@ -420,10 +446,16 @@ impl SolarisCloudburstReverb {
         self.sample_counter = 0;
         self.random_target = [0.0; 8];
         self.random_state = [0.0; 8];
+        self.random = core::array::from_fn(|i| 0x13579u32.wrapping_mul(i as u32 + 1));
         self.solina_phase_slow = 0.0;
         self.solina_phase_fast = 0.0;
         self.mod_phases = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
-        self.set_sample_rate(self.sample_rate);
+        self.quiet_samples = 0;
+        self.dormant = true;
+        let ratio = 12000.0f32 / 80.0f32;
+        for (k, band) in self.ensemble_bands.iter_mut().enumerate() {
+            band.configure(self.sample_rate, 80.0 * ratio.powf(k as f32 / 47.0));
+        }
     }
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         let sr = sample_rate.max(8000.0);
@@ -458,16 +490,18 @@ impl SolarisCloudburstReverb {
         delay_samples: f32,
         input: f32,
         g: f32,
+        filled: u64,
     ) -> f32 {
         let mask = CASCADE_AP_LEN - 1;
         let d = delay_samples.clamp(2.0, (CASCADE_AP_LEN - 2) as f32);
         let di = d as usize;
         let read_idx = (*pos + CASCADE_AP_LEN - di) & mask;
         let frac = d - di as f32;
-        let delayed =
-            buf[read_idx] * (1.0 - frac) + buf[(read_idx + CASCADE_AP_LEN - 1) & mask] * frac;
+        let a = if filled > di as u64 { buf[read_idx] } else { 0.0 };
+        let b = if filled > di as u64 + 1 { buf[(read_idx + CASCADE_AP_LEN - 1) & mask] } else { 0.0 };
+        let delayed = a * (1.0 - frac) + b * frac;
         let v = input - g * delayed;
-        buf[*pos] = v;
+        buf[*pos] = flush_tiny(v);
         *pos = (*pos + 1) & mask;
         delayed + g * v
     }
@@ -480,9 +514,18 @@ impl SolarisCloudburstReverb {
         in_r: f32,
         params: &SolarisReverbParams,
     ) -> (f32, f32) {
-        if params.wet_mix <= 1.0e-5 {
-            return (in_l, in_r);
+        let step = 1.0 / (0.005 * self.sample_rate);
+        let target = if params.enabled { 1.0 } else { 0.0 };
+        self.enable_gain += (target - self.enable_gain).clamp(-step, step);
+        if !params.enabled && self.enable_gain == 0.0
+            && params.bypass_tail == ReverbTailPolicy::Kill && !self.dormant {
+            self.clear_history();
         }
+        let mono_in = 0.5 * (in_l + in_r) * self.enable_gain;
+        if self.dormant && (mono_in == 0.0 || params.freeze) {
+            return self.mix(in_l, in_r, 0.0, 0.0, params);
+        }
+        self.dormant = false;
 
         let coefficient_key = [params.high_cut_hz, params.low_cut_hz, params.decay_sec];
         if self.cached_params != Some(coefficient_key) {
@@ -502,7 +545,6 @@ impl SolarisCloudburstReverb {
             self.cached_params = Some(coefficient_key);
         }
         self.sample_counter = self.sample_counter.wrapping_add(1);
-        let mono_in = 0.5 * (in_l + in_r);
 
         // --- STAGE 1: Pre-Delay (0..500 ms) & 4-Stage Cascade Diffuser ---
         let mask_pd = MAX_PREDELAY_LEN - 1;
@@ -514,8 +556,9 @@ impl SolarisCloudburstReverb {
         };
         let pd_samples = ((pd_ms.clamp(0.0, 500.0) * 0.001 * self.sample_rate) as usize)
             .min(MAX_PREDELAY_LEN - 2);
-        let pd_out =
-            self.predelay_buf[(self.predelay_pos + MAX_PREDELAY_LEN - pd_samples) & mask_pd];
+        let pd_out = if self.sample_counter > pd_samples as u64 {
+            self.predelay_buf[(self.predelay_pos + MAX_PREDELAY_LEN - pd_samples) & mask_pd]
+        } else { 0.0 };
         self.predelay_pos = (self.predelay_pos + 1) & mask_pd;
 
         let sr_scale = self.sample_rate / 48000.0;
@@ -532,6 +575,7 @@ impl SolarisCloudburstReverb {
                 d_len,
                 cascaded,
                 diff_g,
+                self.sample_counter,
             );
         }
 
@@ -613,7 +657,9 @@ impl SolarisCloudburstReverb {
             let frac = total_delay - (d_int as f32);
             let r0 = (self.fdn_write_pos + FDN_BUFFER_LEN - d_int) & mask_fdn;
             let r1 = (r0 + FDN_BUFFER_LEN - 1) & mask_fdn;
-            fdn_reads[ch] = self.fdn_bufs[ch][r0] * (1.0 - frac) + self.fdn_bufs[ch][r1] * frac;
+            let a = if self.sample_counter > d_int as u64 { self.fdn_bufs[ch][r0] } else { 0.0 };
+            let b = if self.sample_counter > d_int as u64 + 1 { self.fdn_bufs[ch][r1] } else { 0.0 };
+            fdn_reads[ch] = a * (1.0 - frac) + b * frac;
         }
 
         // Orthogonal 8x8 Hadamard scatter matrix
@@ -668,10 +714,10 @@ impl SolarisCloudburstReverb {
             } else {
                 // 1-pole High-Cut + Low-Cut damping inside loop
                 self.fdn_lp_states[ch] =
-                    sig_in * (1.0 - lp_coeff) + self.fdn_lp_states[ch] * lp_coeff;
+                    flush_tiny(sig_in * (1.0 - lp_coeff) + self.fdn_lp_states[ch] * lp_coeff);
                 let lp_out = self.fdn_lp_states[ch];
                 self.fdn_hp_states[ch] =
-                    lp_out * (1.0 - hp_coeff) + self.fdn_hp_states[ch] * hp_coeff;
+                    flush_tiny(lp_out * (1.0 - hp_coeff) + self.fdn_hp_states[ch] * hp_coeff);
                 lp_out - self.fdn_hp_states[ch]
             };
 
@@ -679,7 +725,7 @@ impl SolarisCloudburstReverb {
             self.fdn_bufs[ch][self.fdn_write_pos] = if params.freeze {
                 damped.clamp(-4.0, 4.0)
             } else {
-                crate::vcf_cem3320::fast_tanh(damped * 0.85) / 0.85
+                flush_tiny(crate::vcf_cem3320::fast_tanh(damped * 0.85) / 0.85)
             };
         }
 
@@ -693,10 +739,28 @@ impl SolarisCloudburstReverb {
 
         let (wet_l, wet_r) = (raw_tank_l, raw_tank_r);
 
-        let mix = params.wet_mix.clamp(0.0, 1.0);
-        (
-            in_l * (1.0 - mix) + wet_l * mix,
-            in_r * (1.0 - mix) + wet_r * mix,
-        )
+        let activity = mono_in.abs().max(cascaded.abs()).max(ensemble_sig.abs())
+            .max(fdn_reads.iter().fold(0.0f32, |a, x| a.max(x.abs())))
+            .max(wet_l.abs()).max(wet_r.abs());
+        if !params.freeze && activity < 1.0e-20 {
+            self.quiet_samples += 1;
+            // Include a full longest storage horizon; silence before predelay
+            // or cancellation of a single output is not evidence of an empty tank.
+            if self.quiet_samples > MAX_PREDELAY_LEN + CASCADE_AP_LEN * 4 + SHIMMER_BUF_LEN {
+                self.clear_history();
+            }
+        } else { self.quiet_samples = 0; }
+        self.mix(in_l, in_r, wet_l, wet_r, params)
+    }
+
+    fn mix(&self, l: f32, r: f32, wet_l: f32, wet_r: f32, p: &SolarisReverbParams) -> (f32, f32) {
+        let wet = p.wet_mix.clamp(0.0, 1.0);
+        let wet_gain = wet * if p.bypass_tail == ReverbTailPolicy::Kill { self.enable_gain } else { 1.0 };
+        let dry_gain = 1.0 - wet * self.enable_gain;
+        (flush_tiny(l * dry_gain + wet_l * wet_gain), flush_tiny(r * dry_gain + wet_r * wet_gain))
     }
 }
+
+/// -400 dBFS floor prevents gradual underflow in recursive FX states.
+#[inline(always)]
+fn flush_tiny(x: f32) -> f32 { if x.abs() < 1.0e-20 { 0.0 } else { x } }
