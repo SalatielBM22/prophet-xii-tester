@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeCapture, defaultAnalysis, validConfig } from './capture';
+import { decodeCapture, defaultAnalysis, DiscontinuityCounter, validConfig } from './capture';
 describe('actual Agent B PCM transport', () => {
   const block = { sequence: 1, firstFrame: 64, sampleRate: 48000, samples: Array(64).fill(0) };
   it('accepts bounded continuous chunks and final short chunks, never scope snapshots', () => {
@@ -15,5 +15,14 @@ describe('actual Agent B PCM transport', () => {
     expect(validConfig({ ...defaultAnalysis, averageAlpha: 0 })).toBe(false);
     expect(validConfig({ ...defaultAnalysis, kaiserBeta: NaN })).toBe(false);
     expect(validConfig({ ...defaultAnalysis, peakHoldFrames: -.1 })).toBe(false);
+  });
+  it('keeps total discontinuities strictly monotonic across analyzer resets', () => {
+    const counter = new DiscontinuityCounter();
+    expect(counter.total(0)).toBe(0);
+    expect(counter.total(2)).toBe(2);
+    counter.recordReset(2);
+    expect(counter.total(0)).toBe(3);
+    counter.recordReset(0);
+    expect(counter.total(1)).toBe(5);
   });
 });

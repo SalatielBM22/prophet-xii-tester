@@ -22,9 +22,10 @@ from e2e_controls import Suite
 
 
 class NativeSuite(Suite):
-    def __init__(self, base, output, sample_rate):
+    def __init__(self, base, output, sample_rate, assets_dir):
         super().__init__(base, output)
         self.sample_rate=sample_rate
+        self.assets_dir=pathlib.Path(assets_dir)
         self.observations={}
         self.test_loaders=[]
 
@@ -323,7 +324,7 @@ Object.defineProperty(WebSocket.prototype,'onmessage',{
         # Chromium classifies fulfilled/Blob worker scripts differently for
         # loopback WebSockets. Serve the test loader as a genuine same-origin
         # network file, importing the untouched production worker module.
-        assets=pathlib.Path('/workspace/.prophet-cloud/task-a/integrated-ui-dist/assets')
+        assets=self.assets_dir
         production=max(assets.glob('spectrum.worker-*.js'),key=lambda p:p.stat().st_mtime_ns)
         loader=assets/('pcm-test-loader-'+uuid.uuid4().hex+'.mjs')
         loader.write_text(prefix+"""
@@ -512,11 +513,13 @@ for(const data of __startupMessages)self.dispatchEvent(new MessageEvent('message
 
 
 if __name__=="__main__":
+    default_assets=pathlib.Path(__file__).resolve().parents[1]/"dist"/"assets"
     parser=argparse.ArgumentParser()
     parser.add_argument("--base",default="http://127.0.0.1:8792")
-    parser.add_argument("--output",default="/workspace/.prophet-cloud/task-a/e2e-native")
+    parser.add_argument("--output",default="/tmp/prophet-e2e-native")
     parser.add_argument("--sample-rate",type=int,default=48000)
+    parser.add_argument("--assets",default=str(default_assets))
     parser.add_argument("--chromium",default="/usr/bin/chromium")
     parser.add_argument("--case",action="append")
     args=parser.parse_args()
-    raise SystemExit(asyncio.run(NativeSuite(args.base,args.output,args.sample_rate).run(args.chromium,args.case)))
+    raise SystemExit(asyncio.run(NativeSuite(args.base,args.output,args.sample_rate,args.assets).run(args.chromium,args.case)))

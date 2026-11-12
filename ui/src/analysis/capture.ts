@@ -16,3 +16,12 @@ export function decodeCapture(value: unknown): CaptureBlock[] | null {
   }
   return input.blocks as CaptureBlock[];
 }
+export class DiscontinuityCounter {
+  private prior = 0;
+  recordReset(engineDiscontinuities = 0) {
+    this.prior += 1 + Math.max(0, Math.trunc(engineDiscontinuities));
+  }
+  total(engineDiscontinuities: number) {
+    return this.prior + Math.max(0, Math.trunc(engineDiscontinuities));
+  }
+}

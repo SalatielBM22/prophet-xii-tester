@@ -1,15 +1,22 @@
 import init, { WebAnalyzer } from '../../generated/analysis/prophet_analysis.js';
 import wasmUrl from '../../generated/analysis/prophet_analysis_bg.wasm?url';
-import { decodeCapture, defaultAnalysis, validConfig, type AnalysisConfig } from './capture';
+import { decodeCapture, defaultAnalysis, DiscontinuityCounter, validConfig, type AnalysisConfig } from './capture';
 import { spectrumPoints, type SpectrumFrame } from './spectrum';
 
 let config = defaultAnalysis, analyzer: WebAnalyzer | null = null, memory: WebAssembly.Memory;
 let socket: WebSocket | null = null, retry: ReturnType<typeof setTimeout> | undefined;
-let stopped = true, url = '', lastPublish = 0, resets = 0;
+let stopped = true, url = '', lastPublish = 0;
+const discontinuities = new DiscontinuityCounter();
 const ready = init({ module_or_path: wasmUrl }).then(instance => { memory = instance.memory; });
 let lastStatus = '';
 const status = (text: string) => { if (text !== lastStatus) { lastStatus = text; self.postMessage({ kind: 'status', text }); } };
-function clearAnalysis() { if (analyzer) { analyzer.free(); analyzer = null; resets++; } }
+function clearAnalysis() {
+  if (analyzer) {
+    discontinuities.recordReset(analyzer.discontinuities());
+    analyzer.free();
+    analyzer = null;
+  }
+}
 function create(sampleRate: number) {
   clearAnalysis();
   analyzer = new WebAnalyzer(config.fftSize, sampleRate, ['hann', 'blackman-harris', 'kaiser'].indexOf(config.window), config.averageAlpha, config.peakHoldFrames, config.peakDecayDbPerFrame, config.kaiserBeta);
@@ -36,7 +43,7 @@ function receive(text: unknown) {
       const points = spectrumPoints(data, 900), peak = spectrumPoints(data, 900, true);
       let maximum = 1;
       for (let k = 2; k < db.length; k++) if (db[k] > db[maximum]) maximum = k;
-      self.postMessage({ kind: 'spectrum', ...data, dbfs: undefined, peakDbfs: undefined, points, peak, peakHz: maximum * block.sampleRate / config.fftSize, peakDb: db[maximum], discontinuities: resets + engine.discontinuities(), endFrame: engine.end_frame() }, { transfer: [points.buffer, peak.buffer] });
+      self.postMessage({ kind: 'spectrum', ...data, dbfs: undefined, peakDbfs: undefined, points, peak, peakHz: maximum * block.sampleRate / config.fftSize, peakDb: db[maximum], discontinuities: discontinuities.total(engine.discontinuities()), endFrame: engine.end_frame() }, { transfer: [points.buffer, peak.buffer] });
     }
   }
 }
