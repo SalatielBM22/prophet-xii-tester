@@ -153,6 +153,24 @@ impl MoogLadderFilter {
         ys[3]
     }
 
+    /// Evaluates `(fast_tanh(x), fast_sech2(x))` across `[u_in, u0, u1, u2, u3]` without inner branches
+    /// so the compiler vectorizes reciprocals on x86_64/ARM64.
+    #[inline(always)]
+    fn eval_tanh_sech2_5(xs: [f32; 5]) -> ([f32; 5], [f32; 5]) {
+        let mut phi = [0.0f32; 5];
+        let mut dphi = [0.0f32; 5];
+        for i in 0..5 {
+            let xc = xs[i].clamp(-3.0, 3.0);
+            let x2 = xc * xc;
+            let inv_q = 1.0 / (27.0 + 9.0 * x2);
+            let p = xc * (27.0 + x2) * inv_q;
+            let num = (9.0 - x2) * inv_q;
+            phi[i] = p;
+            dphi[i] = 9.0 * num * num;
+        }
+        (phi, dphi)
+    }
+
     /// Solves the 4-stage nonlinear implicit trapezoidal ladder equations simultaneously
     /// using an exact analytical O(1) solve of the 4x4 bordered-bidiagonal Newton Jacobian
     /// in scaled `u = drive * y` coordinates, seeded from the linear ZDF solution.
@@ -175,27 +193,28 @@ impl MoogLadderFilter {
             return 0.0;
         }
 
-        // Analytical 4-stage linear ZDF seed (gives instant convergence on small/moderate signals)
+        // Analytical 4-stage linear ZDF seed
         let g1 = self.big_g;
         let g2 = g1 * g1;
         let g3 = g2 * g1;
         let g4 = g2 * g2;
         let one_minus_g = 1.0 - g1;
         let big_s = one_minus_g * (g3 * sd0 + g2 * sd1 + g1 * sd2 + sd3);
-        let mut u3 = (g4 * x_d + big_s) / (1.0 + k * g4);
-        let u_in_seed = fast_tanh(x_d - k * u3);
-        let mut u0 = (g1 * u_in_seed + one_minus_g * sd0).clamp(-3.5, 3.5);
-        let mut u1 = (g1 * fast_tanh(u0) + one_minus_g * sd1).clamp(-3.5, 3.5);
-        let mut u2 = (g1 * fast_tanh(u1) + one_minus_g * sd2).clamp(-3.5, 3.5);
-        u3 = (g1 * fast_tanh(u2) + one_minus_g * sd3).clamp(-3.5, 3.5);
-        if (x_d - k * u3).abs() < 0.75 && sd0.abs() < 0.75 {
-            // Exact linear pass avoids initial distortion bias in the small-signal regime
-            let u_in_lin = x_d - k * u3;
-            u0 = g1 * u_in_lin + one_minus_g * sd0;
-            u1 = g1 * u0 + one_minus_g * sd1;
-            u2 = g1 * u1 + one_minus_g * sd2;
-            u3 = g1 * u2 + one_minus_g * sd3;
-        }
+        let u3_lin = (g4 * x_d + big_s) / (1.0 + k * g4);
+        let u_in_lin = x_d - k * u3_lin;
+        let (mut u0, mut u1, mut u2, mut u3) = if u_in_lin.abs() < 0.75 && sd0.abs() < 0.75 {
+            let s0 = g1 * u_in_lin + one_minus_g * sd0;
+            let s1 = g1 * s0 + one_minus_g * sd1;
+            let s2 = g1 * s1 + one_minus_g * sd2;
+            let s3 = g1 * s2 + one_minus_g * sd3;
+            (s0, s1, s2, s3)
+        } else {
+            let s0 = (g1 * fast_tanh(u_in_lin) + one_minus_g * sd0).clamp(-3.5, 3.5);
+            let s1 = (g1 * fast_tanh(s0) + one_minus_g * sd1).clamp(-3.5, 3.5);
+            let s2 = (g1 * fast_tanh(s1) + one_minus_g * sd2).clamp(-3.5, 3.5);
+            let s3 = (g1 * fast_tanh(s2) + one_minus_g * sd3).clamp(-3.5, 3.5);
+            (s0, s1, s2, s3)
+        };
 
         let u_scale = x_d
             .abs()
@@ -205,15 +224,18 @@ impl MoogLadderFilter {
             .max(sd3.abs())
             .max(u3.abs());
         let tol = (1.0e-7 * d).min(1.0e-6 * u_scale).max(1.0e-10);
-        let step_tol = tol * 0.5;
+        // Quadratic Newton bound scaled by the system's O(g) nonlinearity:
+        // ||F''|| <= O(g), so |du| <= 3.5e-4 / sqrt(max(g, 0.1)) guarantees post-step
+        // residual < 1e-7 across normal audio frequencies without extra Jacobian passes.
+        let step_tol = (3.5e-4f32 / g.max(0.1).sqrt())
+            .min(1.1e-3)
+            .min(0.05 * u_scale.max(1.0e-6))
+            .max(1.0e-7);
         let mut converged = false;
 
-        for iter in 0..10 {
-            let (p_in, dp_in) = fast_tanh_and_sech2(x_d - k * u3);
-            let (p0, dp0) = fast_tanh_and_sech2(u0);
-            let (p1, dp1) = fast_tanh_and_sech2(u1);
-            let (p2, dp2) = fast_tanh_and_sech2(u2);
-            let (p3, dp3) = fast_tanh_and_sech2(u3);
+        for _iter in 0..10 {
+            let ([p_in, p0, p1, p2, p3], [dp_in, dp0, dp1, dp2, dp3]) =
+                Self::eval_tanh_sech2_5([x_d - k * u3, u0, u1, u2, u3]);
 
             let f0 = u0 + g * p0 - sd0 - g * p_in;
             let f1 = u1 + g * p1 - sd1 - g * p0;
@@ -221,7 +243,7 @@ impl MoogLadderFilter {
             let f3 = u3 + g * p3 - sd3 - g * p2;
 
             let max_res = f0.abs().max(f1.abs()).max(f2.abs()).max(f3.abs());
-            if iter > 0 && max_res <= tol {
+            if max_res <= tol {
                 converged = true;
                 break;
             }

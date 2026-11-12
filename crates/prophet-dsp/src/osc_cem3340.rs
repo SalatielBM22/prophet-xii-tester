@@ -333,7 +333,7 @@ impl Cem3340DualVco {
                 corr_curr += jump * cc;
             }
             if waves_a.pulse {
-                let p_rel = (p_a_start - pw_a_clamped).rem_euclid(1.0);
+                let p_rel = wrap_unit_phase(p_a_start - pw_a_clamped);
                 let p_rel_before = p_rel + (1.0 - tau_sync) * dt_a;
                 if p_rel_before >= 1.0 && dt_a > 1.0e-9 {
                     let tau_pw = ((p_rel_before - 1.0) / dt_a + tau_sync).clamp(0.0, 1.0);
@@ -345,7 +345,7 @@ impl Cem3340DualVco {
             }
 
             // Now Master Osc B resets Slave Osc A to 0.0 at subsample offset `tau_sync` ago!
-            let p_pre_sync = phase_before_sync.rem_euclid(1.0);
+            let p_pre_sync = wrap_unit_phase(phase_before_sync);
             let (amp_pre, slope_pre) = Self::eval_naive_a(p_pre_sync, pw_a_clamped, waves_a);
             let (amp_post, slope_post) = Self::eval_naive_a(0.0, pw_a_clamped, waves_a);
 
@@ -366,7 +366,7 @@ impl Cem3340DualVco {
                 corr_prev += jump_pw * cp;
                 corr_curr += jump_pw * cc;
             }
-            self.phase_a = p_after_sync.rem_euclid(1.0);
+            self.phase_a = wrap_unit_phase(p_after_sync);
         } else {
             // Standard free-running Osc A progression with subsample discontinuity tracking
             let next_p_a = p_a_start + dt_a;
@@ -384,7 +384,7 @@ impl Cem3340DualVco {
                 corr_curr += jump * cc;
             }
             if waves_a.pulse {
-                let p_rel = (p_a_start - pw_a_clamped).rem_euclid(1.0);
+                let p_rel = wrap_unit_phase(p_a_start - pw_a_clamped);
                 let next_p_rel = p_rel + dt_a;
                 if next_p_rel >= 1.0 && dt_a > 1.0e-9 {
                     let tau_pw = ((next_p_rel - 1.0) / dt_a).clamp(0.0, 1.0);
@@ -394,7 +394,7 @@ impl Cem3340DualVco {
                     corr_curr += jump_pw * cc;
                 }
             }
-            self.phase_a = next_p_a.rem_euclid(1.0);
+            self.phase_a = wrap_unit_phase(next_p_a);
         }
 
         let (naive_curr_a, _) = Self::eval_naive_a(self.phase_a, pw_a_clamped, waves_a);

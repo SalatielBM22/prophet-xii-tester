@@ -235,6 +235,15 @@ pub struct ProphetVoice {
     pub oversampler: VoiceOversampler,
     pub base_sample_rate: f32,
     pub last_mono: f32,
+    cached_osc_a_arg: f32,
+    cached_osc_a_hz: f32,
+    cached_osc_b_arg: f32,
+    cached_osc_b_hz: f32,
+    cached_cutoff_arg: f32,
+    cached_cutoff_exp2: f32,
+    cached_pan: f32,
+    cached_pan_l: f32,
+    cached_pan_r: f32,
 }
 
 impl ProphetVoice {
@@ -243,6 +252,8 @@ impl ProphetVoice {
         let sr = sample_rate.max(8000.0);
         let os_factor = OversampleFactor::X2;
         let os_sr = sr * (os_factor.as_usize() as f32);
+        let pan = (trimpots.pan * 0.5 + 0.5).clamp(0.0, 1.0);
+        let (pan_r, pan_l) = (pan * core::f32::consts::FRAC_PI_2).sin_cos();
 
         Self {
             voice_index,
@@ -272,6 +283,15 @@ impl ProphetVoice {
             oversampler: VoiceOversampler::new(os_factor),
             base_sample_rate: sr,
             last_mono: 0.0,
+            cached_osc_a_arg: f32::NAN,
+            cached_osc_a_hz: 440.0,
+            cached_osc_b_arg: f32::NAN,
+            cached_osc_b_hz: 440.0,
+            cached_cutoff_arg: f32::NAN,
+            cached_cutoff_exp2: 1.0,
+            cached_pan: trimpots.pan,
+            cached_pan_l: pan_l,
+            cached_pan_r: pan_r,
         }
     }
 
@@ -466,7 +486,11 @@ impl ProphetVoice {
             }) + params.osc_b_semi
                 + params.osc_b_fine_cents * 0.01
                 + lfo_osc_b;
-            440.0 * ((osc_b_pitch_semis - 69.0) * (1.0 / 12.0)).exp2()
+            if osc_b_pitch_semis != self.cached_osc_b_arg {
+                self.cached_osc_b_arg = osc_b_pitch_semis;
+                self.cached_osc_b_hz = 440.0 * ((osc_b_pitch_semis - 69.0) * (1.0 / 12.0)).exp2();
+            }
+            self.cached_osc_b_hz
         };
         let pw_b = (params.osc_b_pw + lfo_pw).clamp(0.01, 0.99);
 
@@ -477,14 +501,12 @@ impl ProphetVoice {
             base_pitch + params.osc_a_semi + params.osc_a_fine_cents * 0.01 + lfo_osc_a * 2.0;
         let pm_freq_scale = osc_b_polymod * params.poly_mod.dest_osc_a_freq * 48.0;
         let fixed_freq_a = if pm_freq_scale == 0.0 {
-            Some(
-                440.0
-                    * ((osc_a_pitch_base
-                        + static_polymod * params.poly_mod.dest_osc_a_freq * 48.0
-                        - 69.0)
-                        * (1.0 / 12.0))
-                        .exp2(),
-            )
+            let arg_a = osc_a_pitch_base + static_polymod * params.poly_mod.dest_osc_a_freq * 48.0;
+            if arg_a != self.cached_osc_a_arg {
+                self.cached_osc_a_arg = arg_a;
+                self.cached_osc_a_hz = 440.0 * ((arg_a - 69.0) * (1.0 / 12.0)).exp2();
+            }
+            Some(self.cached_osc_a_hz)
         } else {
             None
         };
@@ -504,9 +526,12 @@ impl ProphetVoice {
         let pm_filt_scale = osc_b_polymod * params.poly_mod.dest_filter_cutoff * 5.0;
         let cutoff_needs_substep_update = pm_filt_scale != 0.0;
         if !cutoff_needs_substep_update {
-            let inst_cutoff = params.filter_cutoff_hz
-                * (cutoff_octaves_base + static_polymod * params.poly_mod.dest_filter_cutoff * 5.0)
-                    .exp2();
+            let oct_arg = cutoff_octaves_base + static_polymod * params.poly_mod.dest_filter_cutoff * 5.0;
+            if oct_arg != self.cached_cutoff_arg {
+                self.cached_cutoff_arg = oct_arg;
+                self.cached_cutoff_exp2 = oct_arg.exp2();
+            }
+            let inst_cutoff = params.filter_cutoff_hz * self.cached_cutoff_exp2;
             vcf_ref.set_params(
                 inst_cutoff,
                 params.filter_resonance,
@@ -585,11 +610,14 @@ impl ProphetVoice {
 
         self.last_mono = voice_out;
         // Equal-power stereo panning
-        let pan = (self.unison_pan * 0.5 + 0.5).clamp(0.0, 1.0);
-        let angle = pan * core::f32::consts::FRAC_PI_2;
-        let left = voice_out * angle.cos();
-        let right = voice_out * angle.sin();
-        (left, right)
+        if self.unison_pan != self.cached_pan {
+            self.cached_pan = self.unison_pan;
+            let pan = (self.unison_pan * 0.5 + 0.5).clamp(0.0, 1.0);
+            let (pr, pl) = (pan * core::f32::consts::FRAC_PI_2).sin_cos();
+            self.cached_pan_l = pl;
+            self.cached_pan_r = pr;
+        }
+        (voice_out * self.cached_pan_l, voice_out * self.cached_pan_r)
     }
 }
 

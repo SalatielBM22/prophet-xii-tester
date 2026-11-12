@@ -64,7 +64,12 @@ impl OnePoleSmoother {
 
     #[inline(always)]
     pub fn next(&mut self) -> f32 {
-        self.current += (self.target - self.current) * self.coeff;
+        let diff = self.target - self.current;
+        if diff.abs() <= 1.0e-7 * (1.0 + self.target.abs()) {
+            self.current = self.target;
+        } else {
+            self.current += diff * self.coeff;
+        }
         self.current
     }
 }
@@ -247,50 +252,77 @@ impl ProphetXiiKernel {
         self.smooth[22].target = self.voice_params.poly_mod.dest_osc_a_pw;
         self.smooth[23].target = self.voice_params.poly_mod.dest_filter_cutoff;
 
-        for i in 0..n {
-            local_params.osc_a_semi = self.smooth[0].next();
-            local_params.osc_a_fine_cents = self.smooth[1].next();
-            local_params.osc_a_pw = self.smooth[2].next();
-            local_params.osc_b_semi = self.smooth[3].next();
-            local_params.osc_b_fine_cents = self.smooth[4].next();
-            local_params.osc_b_pw = self.smooth[5].next();
-            local_params.mix_osc_a = self.smooth[6].next();
-            local_params.mix_osc_b = self.smooth[7].next();
-            local_params.mix_noise = self.smooth[8].next();
-            local_params.noise_pink_blend = self.smooth[9].next();
-            local_params.filter_drive = self.smooth[10].next();
-            local_params.filter_env_amount = self.smooth[11].next();
-            local_params.filter_key_track = self.smooth[12].next();
-            local_params.filter_topology_morph = self.smooth[13].next();
-            local_params.moog_bass_comp = self.smooth[14].next();
-            local_params.vintage_amount = self.smooth[15].next();
-            local_params.pitch_bend_semis = self.smooth[16].next();
-            local_params.aftertouch = self.smooth[17].next();
-            local_params.velocity_sensitivity = self.smooth[18].next();
-            local_params.poly_mod.src_filter_env = self.smooth[19].next();
-            local_params.poly_mod.src_osc_b = self.smooth[20].next();
-            local_params.poly_mod.dest_osc_a_freq = self.smooth[21].next();
-            local_params.poly_mod.dest_osc_a_pw = self.smooth[22].next();
-            local_params.poly_mod.dest_filter_cutoff = self.smooth[23].next();
+        let settled = self.smooth.iter().all(|s| s.current == s.target)
+            && self.cutoff_smoother.current == self.cutoff_smoother.target
+            && self.res_smoother.current == self.res_smoother.target
+            && self.gain_smoother.current == self.gain_smoother.target;
 
-            local_params.filter_cutoff_hz = self.cutoff_smoother.next();
-            local_params.filter_resonance = self.res_smoother.next();
+        if settled {
+            local_params.filter_cutoff_hz = self.cutoff_smoother.current;
+            local_params.filter_resonance = self.res_smoother.current;
+            let gain = self.gain_smoother.current;
+            for i in 0..n {
+                let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
+                let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
+                let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
+                let (rev_l, rev_r) = self
+                    .reverb
+                    .process_stereo(chor_l, chor_r, &self.reverb_params);
 
-            let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
-            let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
-            let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
-            let (rev_l, rev_r) = self
-                .reverb
-                .process_stereo(chor_l, chor_r, &self.reverb_params);
+                let final_l = (rev_l * gain).clamp(-1.0, 1.0);
+                let final_r = (rev_r * gain).clamp(-1.0, 1.0);
 
-            let gain = self.gain_smoother.next();
-            let final_l = (rev_l * gain).clamp(-1.0, 1.0);
-            let final_r = (rev_r * gain).clamp(-1.0, 1.0);
+                out_l[i] = final_l;
+                out_r[i] = final_r;
+                self.last_telemetry.scope_samples_l[i] = final_l;
+                self.last_telemetry.scope_samples_r[i] = final_r;
+            }
+        } else {
+            for i in 0..n {
+                local_params.osc_a_semi = self.smooth[0].next();
+                local_params.osc_a_fine_cents = self.smooth[1].next();
+                local_params.osc_a_pw = self.smooth[2].next();
+                local_params.osc_b_semi = self.smooth[3].next();
+                local_params.osc_b_fine_cents = self.smooth[4].next();
+                local_params.osc_b_pw = self.smooth[5].next();
+                local_params.mix_osc_a = self.smooth[6].next();
+                local_params.mix_osc_b = self.smooth[7].next();
+                local_params.mix_noise = self.smooth[8].next();
+                local_params.noise_pink_blend = self.smooth[9].next();
+                local_params.filter_drive = self.smooth[10].next();
+                local_params.filter_env_amount = self.smooth[11].next();
+                local_params.filter_key_track = self.smooth[12].next();
+                local_params.filter_topology_morph = self.smooth[13].next();
+                local_params.moog_bass_comp = self.smooth[14].next();
+                local_params.vintage_amount = self.smooth[15].next();
+                local_params.pitch_bend_semis = self.smooth[16].next();
+                local_params.aftertouch = self.smooth[17].next();
+                local_params.velocity_sensitivity = self.smooth[18].next();
+                local_params.poly_mod.src_filter_env = self.smooth[19].next();
+                local_params.poly_mod.src_osc_b = self.smooth[20].next();
+                local_params.poly_mod.dest_osc_a_freq = self.smooth[21].next();
+                local_params.poly_mod.dest_osc_a_pw = self.smooth[22].next();
+                local_params.poly_mod.dest_filter_cutoff = self.smooth[23].next();
 
-            out_l[i] = final_l;
-            out_r[i] = final_r;
-            self.last_telemetry.scope_samples_l[i] = final_l;
-            self.last_telemetry.scope_samples_r[i] = final_r;
+                local_params.filter_cutoff_hz = self.cutoff_smoother.next();
+                local_params.filter_resonance = self.res_smoother.next();
+
+                let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
+                let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
+                let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
+                let (rev_l, rev_r) = self
+                    .reverb
+                    .process_stereo(chor_l, chor_r, &self.reverb_params);
+
+                let gain = self.gain_smoother.next();
+                let final_l = (rev_l * gain).clamp(-1.0, 1.0);
+                let final_r = (rev_r * gain).clamp(-1.0, 1.0);
+
+                out_l[i] = final_l;
+                out_r[i] = final_r;
+                self.last_telemetry.scope_samples_l[i] = final_l;
+                self.last_telemetry.scope_samples_r[i] = final_r;
+            }
         }
 
         // Update lock-free telemetry snapshot for 12-Voice Diagnostic Matrix
