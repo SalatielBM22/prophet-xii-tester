@@ -87,26 +87,37 @@ const TAPS: [f32; 65] = [
 ];
 #[derive(Clone, Debug)]
 struct Fir {
-    data: [f32; 65],
+    data: [f32; 130],
     pos: usize,
 }
 impl Fir {
     const fn new() -> Self {
         Self {
-            data: [0.0; 65],
+            data: [0.0; 130],
             pos: 0,
         }
     }
-    #[inline]
+    #[inline(always)]
+    fn push(&mut self, x: f32) {
+        let p = self.pos;
+        self.data[p] = x;
+        self.data[p + 65] = x;
+        self.pos = if p == 64 { 0 } else { p + 1 };
+    }
+    #[inline(always)]
     fn step(&mut self, x: f32) -> f32 {
-        self.data[self.pos] = x;
-        let mut y = 0.0;
-        // Half-band zero taps are omitted; the center tap is handled separately.
-        for i in (1..65).step_by(2) {
-            y += TAPS[i] * self.data[(self.pos + 65 - i) % 65];
+        let p = self.pos;
+        self.data[p] = x;
+        self.data[p + 65] = x;
+        let base = p + 65;
+        // Center tap (32) plus symmetric odd half-band pairs (k, 64 - k); even taps are ~0 and omitted.
+        let mut y = TAPS[32] * self.data[base - 32];
+        let mut k = 1usize;
+        while k < 32 {
+            y += TAPS[k] * (self.data[base - k] + self.data[base - (64 - k)]);
+            k += 2;
         }
-        y += TAPS[32] * self.data[(self.pos + 65 - 32) % 65];
-        self.pos = (self.pos + 1) % 65;
+        self.pos = if p == 64 { 0 } else { p + 1 };
         y
     }
 }
@@ -133,9 +144,10 @@ impl HalfBandStage {
     pub fn upsample_sample(&mut self, x: f32) -> (f32, f32) {
         (2.0 * self.up.step(x), 2.0 * self.up.step(0.0))
     }
+    #[inline(always)]
     pub fn downsample_sample(&mut self, a: f32, b: f32) -> f32 {
         let y = self.down.step(a);
-        self.down.step(b);
+        self.down.push(b);
         y
     }
 }

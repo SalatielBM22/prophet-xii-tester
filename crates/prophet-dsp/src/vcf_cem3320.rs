@@ -27,6 +27,20 @@ pub fn fast_sech2(x: f32) -> f32 {
     9.0 * (x * x - 9.0).powi(2) / (q * q)
 }
 
+/// Computes `(fast_tanh(x), fast_sech2(x))` sharing a single reciprocal `1 / (27 + 9x^2)`.
+#[inline(always)]
+pub fn fast_tanh_and_sech2(x: f32) -> (f32, f32) {
+    let x2 = x * x;
+    if x2 >= 9.0 {
+        return (if x >= 0.0 { 1.0 } else { -1.0 }, 0.0);
+    }
+    let inv_q = 1.0 / (27.0 + 9.0 * x2);
+    let phi = x * (27.0 + x2) * inv_q;
+    let num = (9.0 - x2) * inv_q;
+    let dphi = 9.0 * num * num;
+    (phi, dphi)
+}
+
 /// Curtis CEM3320 4-Pole Low-Pass ZDF/TPT Filter (topology-inspired VA model, not circuit calibrated).
 #[repr(C, align(32))]
 #[derive(Clone, Debug)]
@@ -44,6 +58,8 @@ pub struct Cem3320Filter {
     g: f32,
     big_g: f32,
     dc_g: f32,
+    cached_tan_fc: f32,
+    cached_tan_sr: f32,
 }
 
 impl Cem3320Filter {
@@ -59,6 +75,8 @@ impl Cem3320Filter {
             g: 0.1,
             big_g: 0.09,
             dc_g: 0.0003,
+            cached_tan_fc: -1.0,
+            cached_tan_sr: -1.0,
         };
         flt.update_sample_rate(sample_rate);
         flt.set_params(2000.0, 0.0, 1.0);
@@ -88,10 +106,14 @@ impl Cem3320Filter {
         self.resonance = resonance.clamp(0.0, 1.0);
         self.drive = drive.clamp(0.25, 4.0);
 
-        // Pre-warped bilinear integrator gain g = tan(pi * fc / fs)
-        let g = (PI * fc / self.sample_rate).tan();
-        self.g = g;
-        self.big_g = g / (1.0 + g);
+        if fc != self.cached_tan_fc || self.sample_rate != self.cached_tan_sr {
+            // Pre-warped bilinear integrator gain g = tan(pi * fc / fs)
+            let g = (PI * fc / self.sample_rate).tan();
+            self.g = g;
+            self.big_g = g / (1.0 + g);
+            self.cached_tan_fc = fc;
+            self.cached_tan_sr = self.sample_rate;
+        }
     }
 
     /// Processes a single audio sample through the 4-pole ZDF/TPT CEM3320 OTA cascade.
@@ -115,12 +137,12 @@ impl Cem3320Filter {
         let big_s = (1.0 - g1) * (g3 * self.s[0] + g2 * self.s[1] + g1 * self.s[2] + self.s[3]);
 
         // Global feedback gain k in [0.0, 4.5] (self-oscillation threshold at k = 4.0)
-        let input = fast_tanh(input * self.drive) / self.drive;
-        let k = 4.5 * self.resonance;
         let drv = self.drive;
         let inv_drv = 1.0 / drv;
+        let input = fast_tanh(input * drv) * inv_drv;
+        let k = 4.5 * self.resonance;
 
-        // 5 Hz TPT high-pass transfer on y4: y_hp = (1 - dc_g) * y4 - dc_block_state
+        // 5 Hz TPT high-pass transfer on y4: y_hp = (1 - dc_g) * (y4 - dc_block_state)
         let hp_gain = 1.0 - self.dc_g;
 
         // Initial linear ZDF estimate for y4
@@ -128,13 +150,14 @@ impl Cem3320Filter {
         let mut y4 = (g4 * input + big_s) / linear_denom;
 
         // At most 6 Newton iterations for the rational nonlinear feedback root:
-        // F(y4) = y4 - G^4 * (input - k * inv_drv * tanh(drv * (hp_gain * y4 - dc_block_state))) - S = 0
+        // F(y4) = y4 - G^4 * (input - k * inv_drv * tanh(drv * hp_gain * (y4 - dc_block_state))) - S = 0
+        let g4k = g4 * k;
         for _ in 0..6 {
             let y_hp = hp_gain * (y4 - self.dc_block_state);
-            let sat_fb = fast_tanh(drv * y_hp) * inv_drv;
-            let u = input - k * sat_fb;
+            let (phi, dphi) = fast_tanh_and_sech2(drv * y_hp);
+            let u = input - k * (phi * inv_drv);
             let f_val = y4 - g4 * u - big_s;
-            let df_dy4 = 1.0 + g4 * k * hp_gain * fast_sech2(drv * y_hp);
+            let df_dy4 = 1.0 + g4k * hp_gain * dphi;
             y4 -= f_val / df_dy4;
             if f_val.abs() < 1.0e-7 {
                 break;

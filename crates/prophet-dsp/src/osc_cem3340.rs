@@ -108,6 +108,23 @@ impl Default for OscBWaveforms {
     }
 }
 
+/// Unit-phase fast wrap helper equivalent to `x.rem_euclid(1.0)` for small shifts `|x| < 3.0`.
+#[inline(always)]
+fn wrap_unit_phase(mut x: f32) -> f32 {
+    if x >= 1.0 {
+        x -= 1.0;
+        if x >= 1.0 {
+            x = x.rem_euclid(1.0);
+        }
+    } else if x < 0.0 {
+        x += 1.0;
+        if x < 0.0 {
+            x = x.rem_euclid(1.0);
+        }
+    }
+    x
+}
+
 /// Curtis CEM3340 Dual VCO Core (Oscillator B = Master, Oscillator A = Slave with Sub-Sample Hard Sync).
 #[repr(C, align(32))]
 #[derive(Clone, Debug)]
@@ -121,6 +138,10 @@ pub struct Cem3340DualVco {
     /// Per-voice deterministic frequency dispersion in cents (e.g. +/- 3.0 cents)
     pub cents_offset_a: f32,
     pub cents_offset_b: f32,
+    cached_cents_a: f32,
+    cached_cents_b: f32,
+    cached_disp_a: f32,
+    cached_disp_b: f32,
 }
 
 impl Cem3340DualVco {
@@ -135,6 +156,10 @@ impl Cem3340DualVco {
             inv_sample_rate: 1.0 / sr,
             cents_offset_a,
             cents_offset_b,
+            cached_cents_a: cents_offset_a,
+            cached_cents_b: cents_offset_b,
+            cached_disp_a: (cents_offset_a * (1.0 / 1200.0)).exp2(),
+            cached_disp_b: (cents_offset_b * (1.0 / 1200.0)).exp2(),
         }
     }
 
@@ -203,9 +228,17 @@ impl Cem3340DualVco {
         let pw_a_clamped = pw_a.clamp(0.01, 0.99);
         let pw_b_clamped = pw_b.clamp(0.01, 0.99);
 
-        // Apply deterministic CEM3340 per-voice tuning dispersion
-        let disp_a = (self.cents_offset_a * (1.0 / 1200.0)).exp2();
-        let disp_b = (self.cents_offset_b * (1.0 / 1200.0)).exp2();
+        // Apply deterministic CEM3340 per-voice tuning dispersion (cached across substeps)
+        if self.cents_offset_a != self.cached_cents_a {
+            self.cached_cents_a = self.cents_offset_a;
+            self.cached_disp_a = (self.cents_offset_a * (1.0 / 1200.0)).exp2();
+        }
+        if self.cents_offset_b != self.cached_cents_b {
+            self.cached_cents_b = self.cents_offset_b;
+            self.cached_disp_b = (self.cents_offset_b * (1.0 / 1200.0)).exp2();
+        }
+        let disp_a = self.cached_disp_a;
+        let disp_b = self.cached_disp_b;
 
         let fa = (freq_a_hz * disp_a).clamp(0.01, 0.48 * self.sample_rate);
         let fb = if waves_b.lo_freq {
@@ -227,7 +260,7 @@ impl Cem3340DualVco {
         } else {
             0.0
         };
-        self.phase_b = next_phase_b_unwrapped - (next_phase_b_unwrapped.floor());
+        self.phase_b = wrap_unit_phase(next_phase_b_unwrapped);
 
         // Synthesize Oscillator B output
         let mut out_b = 0.0;
@@ -250,7 +283,7 @@ impl Cem3340DualVco {
                 3.0 - 4.0 * p_b
             };
             if use_blep_b {
-                let p_b_half = (p_b + 0.5).rem_euclid(1.0);
+                let p_b_half = wrap_unit_phase(p_b + 0.5);
                 tri_b += 4.0 * (poly_blamp_2(p_b, dt_b) - poly_blamp_2(p_b_half, dt_b));
             }
             out_b += tri_b;
@@ -260,7 +293,7 @@ impl Cem3340DualVco {
             let dc_comp_b = 1.0 - 2.0 * pw_b_clamped;
             let mut pulse_b = (if p_b < pw_b_clamped { 1.0 } else { -1.0 }) + dc_comp_b;
             if use_blep_b {
-                let p_b_pw = (p_b - pw_b_clamped).rem_euclid(1.0);
+                let p_b_pw = wrap_unit_phase(p_b - pw_b_clamped);
                 pulse_b += poly_blep_4(p_b, dt_b) - poly_blep_4(p_b_pw, dt_b);
             }
             out_b += pulse_b;

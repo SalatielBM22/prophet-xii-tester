@@ -432,62 +432,113 @@ impl ProphetVoice {
         let vcf_ref = &mut self.vcf;
         let last_osc_b_ref = &mut self.last_osc_b;
 
+        let lfo_osc_b = if params.lfo_routes[1] {
+            lfo_mod_signal * 2.0
+        } else {
+            0.0
+        };
+        let lfo_pw = if params.lfo_routes[2] {
+            lfo_mod_signal * 0.25
+        } else {
+            0.0
+        };
+        let lfo_cutoff = if params.lfo_routes[3] {
+            lfo_mod_signal * 1.5
+        } else {
+            0.0
+        };
+
+        // Osc B frequency and PW are always invariant across oversampled substeps.
+        let freq_b_hz = if params.osc_b_waves.lo_freq {
+            let lo_base = if params.osc_b_waves.key_tracking {
+                2.0 * ((base_pitch - 60.0) * (1.0 / 12.0)).exp2()
+            } else {
+                2.0
+            };
+            (lo_base
+                * ((params.osc_b_semi + params.osc_b_fine_cents * 0.01) * (1.0 / 12.0)).exp2())
+            .clamp(0.05, 150.0)
+        } else {
+            let osc_b_pitch_semis = (if params.osc_b_waves.key_tracking {
+                base_pitch
+            } else {
+                60.0
+            }) + params.osc_b_semi
+                + params.osc_b_fine_cents * 0.01
+                + lfo_osc_b;
+            440.0 * ((osc_b_pitch_semis - 69.0) * (1.0 / 12.0)).exp2()
+        };
+        let pw_b = (params.osc_b_pw + lfo_pw).clamp(0.01, 0.99);
+
+        let static_polymod = params.poly_mod.src_filter_env * filt_eg_polymod;
+        let osc_b_polymod = params.poly_mod.src_osc_b;
+
+        let osc_a_pitch_base =
+            base_pitch + params.osc_a_semi + params.osc_a_fine_cents * 0.01 + lfo_osc_a * 2.0;
+        let pm_freq_scale = osc_b_polymod * params.poly_mod.dest_osc_a_freq * 48.0;
+        let fixed_freq_a = if pm_freq_scale == 0.0 {
+            Some(
+                440.0
+                    * ((osc_a_pitch_base
+                        + static_polymod * params.poly_mod.dest_osc_a_freq * 48.0
+                        - 69.0)
+                        * (1.0 / 12.0))
+                        .exp2(),
+            )
+        } else {
+            None
+        };
+
+        let osc_a_pw_base = params.osc_a_pw + lfo_pw;
+        let pm_pw_scale = osc_b_polymod * params.poly_mod.dest_osc_a_pw * 0.48;
+        let fixed_pw_a = if pm_pw_scale == 0.0 {
+            Some((osc_a_pw_base + static_polymod * params.poly_mod.dest_osc_a_pw * 0.48).clamp(0.01, 0.99))
+        } else {
+            None
+        };
+
+        let cutoff_octaves_base = filt_eg * params.filter_env_amount * 6.0 * vel_scale
+            + key_track_octaves
+            + aftertouch_total * 2.0
+            + lfo_cutoff;
+        let pm_filt_scale = osc_b_polymod * params.poly_mod.dest_filter_cutoff * 5.0;
+        let cutoff_needs_substep_update = pm_filt_scale != 0.0;
+        if !cutoff_needs_substep_update {
+            let inst_cutoff = params.filter_cutoff_hz
+                * (cutoff_octaves_base + static_polymod * params.poly_mod.dest_filter_cutoff * 5.0)
+                    .exp2();
+            vcf_ref.set_params(
+                inst_cutoff,
+                params.filter_resonance,
+                params.filter_drive,
+                params.moog_bass_comp,
+                params.filter_topology_morph,
+            );
+        }
+
+        let has_noise = params.mix_noise > 1.0e-5;
         let filtered_sample = self.oversampler.process_voice_sample(|| {
             // Audio-rate Poly-Mod bus combining Filter EG and Osc B
-            let poly_mod_bus = params.poly_mod.src_filter_env * filt_eg_polymod
-                + params.poly_mod.src_osc_b * (*last_osc_b_ref);
+            let poly_mod_bus = static_polymod + osc_b_polymod * (*last_osc_b_ref);
 
             // 1. Osc A Instantaneous Frequency (V/Oct exponential modulation)
-            let osc_a_pitch_semis = base_pitch
-                + params.osc_a_semi
-                + params.osc_a_fine_cents * 0.01
-                + (poly_mod_bus * params.poly_mod.dest_osc_a_freq * 48.0)
-                + lfo_osc_a * 2.0;
-            let freq_a_hz = 440.0 * ((osc_a_pitch_semis - 69.0) * (1.0 / 12.0)).exp2();
-
-            // 2. Osc B Instantaneous Frequency (Audio-rate or LO FREQ sub-audio LFO)
-            let freq_b_hz = if params.osc_b_waves.lo_freq {
-                let lo_base = if params.osc_b_waves.key_tracking {
-                    2.0 * ((base_pitch - 60.0) * (1.0 / 12.0)).exp2()
-                } else {
-                    2.0
-                };
-                (lo_base
-                    * ((params.osc_b_semi + params.osc_b_fine_cents * 0.01) * (1.0 / 12.0)).exp2())
-                .clamp(0.05, 150.0)
-            } else {
-                let osc_b_pitch_semis = (if params.osc_b_waves.key_tracking {
-                    base_pitch
-                } else {
-                    60.0
-                }) + params.osc_b_semi
-                    + params.osc_b_fine_cents * 0.01
-                    + if params.lfo_routes[1] {
-                        lfo_mod_signal * 2.0
-                    } else {
-                        0.0
-                    };
-                440.0 * ((osc_b_pitch_semis - 69.0) * (1.0 / 12.0)).exp2()
+            let freq_a_hz = match fixed_freq_a {
+                Some(f) => f,
+                None => {
+                    let osc_a_pitch_semis = osc_a_pitch_base
+                        + (poly_mod_bus * params.poly_mod.dest_osc_a_freq * 48.0);
+                    440.0 * ((osc_a_pitch_semis - 69.0) * (1.0 / 12.0)).exp2()
+                }
             };
 
-            // 3. Pulse Width Modulation (Poly-Mod -> PW A + Global LFO -> PW A+B)
-            let pw_a = (params.osc_a_pw
-                + poly_mod_bus * params.poly_mod.dest_osc_a_pw * 0.48
-                + if params.lfo_routes[2] {
-                    lfo_mod_signal * 0.25
-                } else {
-                    0.0
-                })
-            .clamp(0.01, 0.99);
-            let pw_b = (params.osc_b_pw
-                + if params.lfo_routes[2] {
-                    lfo_mod_signal * 0.25
-                } else {
-                    0.0
-                })
-            .clamp(0.01, 0.99);
+            // 2. Pulse Width Modulation (Poly-Mod -> PW A + Global LFO -> PW A+B)
+            let pw_a = match fixed_pw_a {
+                Some(pw) => pw,
+                None => (osc_a_pw_base + poly_mod_bus * params.poly_mod.dest_osc_a_pw * 0.48)
+                    .clamp(0.01, 0.99),
+            };
 
-            // 4. Generate CEM3340 Dual VCO with Exact Sub-Sample Hard Sync
+            // 3. Generate CEM3340 Dual VCO with Exact Sub-Sample Hard Sync
             let (out_a, out_b) = vco_ref.process_sample(
                 freq_a_hz,
                 freq_b_hz,
@@ -499,33 +550,27 @@ impl ProphetVoice {
             );
             *last_osc_b_ref = out_b;
 
-            // 5. Noise Generator & Mixer Stage
-            let noise_sig = if params.mix_noise > 1.0e-5 {
+            // 4. Noise Generator & Mixer Stage
+            let noise_sig = if has_noise {
                 noise_ref.process(params.noise_pink_blend) * params.mix_noise
             } else {
                 0.0
             };
             let mixer_out = out_a * params.mix_osc_a + out_b * params.mix_osc_b + noise_sig;
 
-            // 6. Instantaneous ZDF Filter Cutoff Modulation (V/Oct exponential)
-            let cutoff_octaves = filt_eg * params.filter_env_amount * 6.0 * vel_scale
-                + key_track_octaves
-                + poly_mod_bus * params.poly_mod.dest_filter_cutoff * 5.0
-                + aftertouch_total * 2.0
-                + if params.lfo_routes[3] {
-                    lfo_mod_signal * 1.5
-                } else {
-                    0.0
-                };
-            let inst_cutoff = params.filter_cutoff_hz * cutoff_octaves.exp2();
-
-            vcf_ref.set_params(
-                inst_cutoff,
-                params.filter_resonance,
-                params.filter_drive,
-                params.moog_bass_comp,
-                params.filter_topology_morph,
-            );
+            // 5. Instantaneous ZDF Filter Cutoff Modulation (V/Oct exponential)
+            if cutoff_needs_substep_update {
+                let cutoff_octaves =
+                    cutoff_octaves_base + poly_mod_bus * params.poly_mod.dest_filter_cutoff * 5.0;
+                let inst_cutoff = params.filter_cutoff_hz * cutoff_octaves.exp2();
+                vcf_ref.set_params(
+                    inst_cutoff,
+                    params.filter_resonance,
+                    params.filter_drive,
+                    params.moog_bass_comp,
+                    params.filter_topology_morph,
+                );
+            }
             vcf_ref.process_sample(mixer_out)
         });
 
