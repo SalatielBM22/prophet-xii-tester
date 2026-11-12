@@ -1,0 +1,63 @@
+warning: unused field `authors` in `workspace.package`
+  --> Cargo.toml:17:1
+   |
+17 | authors = ["PROPHET-XII DSP Engineering Team"]
+   | ^^^^^^^
+   |
+   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default
+help: consider removing the field `workspace.package.authors`
+warning: workspace (manifest) generated 1 warning
+   Compiling libc v0.2.191
+   Compiling itoa v1.0.19
+   Compiling cfg-if v1.0.5
+   Compiling log v0.4.35
+   Compiling serde_core v1.0.229
+   Compiling http v1.5.0
+   Compiling once_cell v1.21.4
+   Compiling tracing-core v0.1.36
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.4
+   Compiling http-body v1.1.0
+   Compiling tokio v1.54.1
+   Compiling getrandom v0.3.4
+   Compiling rand_core v0.9.5
+   Compiling sha1 v0.10.7
+   Compiling rand_chacha v0.9.0
+   Compiling rand v0.9.5
+   Compiling http-body-util v0.1.5
+   Compiling alsa-sys v0.3.1
+   Compiling tracing v0.1.44
+   Compiling smallvec v1.16.5
+   Compiling serde v1.0.229
+   Compiling alsa v0.9.1
+   Compiling tungstenite v0.29.0
+   Compiling zmij v1.0.23
+   Compiling memchr v2.8.3
+   Compiling prophet-dsp v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-dsp)
+   Compiling prophet-params v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-params)
+   Compiling serde_urlencoded v0.7.1
+   Compiling serde_json v1.0.154
+   Compiling axum-core v0.5.6
+   Compiling serde_path_to_error v0.1.20
+   Compiling hyper v1.12.0
+   Compiling hyper-util v0.1.21
+   Compiling tower v0.5.3
+   Compiling tokio-tungstenite v0.29.0
+   Compiling tokio-util v0.7.20
+   Compiling bitflags v1.3.2
+   Compiling cpal v0.15.3
+   Compiling axum v0.8.9
+   Compiling tower-http v0.6.11
+   Compiling midir v0.10.4
+   Compiling prophet-control v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-control)
+   Compiling prophet-standalone v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-standalone)
+    Finished `release` profile [optimized] target(s) in 22.93s
+     Running tests/callback.rs (target/release/build/prophet-standalone/72b81cb050ad66dc/out/callback-72b81cb050ad66dc)
+
+running 1 test
+test native_callback_has_no_allocations_including_control_and_telemetry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s
+
