@@ -1,0 +1,10 @@
+[package]
+name = "prophet-ui-envelope-oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+prophet-dsp = { path = "../../../crates/prophet-dsp" }
