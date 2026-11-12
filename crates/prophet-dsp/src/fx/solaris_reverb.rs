@@ -550,10 +550,15 @@ impl SolarisCloudburstReverb {
                 EnsembleMode::Forte => 1.25,
             };
 
+            // Exactly three phase pairs are shared by all 48 bands (#1).
+            let slow: [f32; 3] = core::array::from_fn(|i|
+                (TAU * (self.solina_phase_slow + i as f32 / 3.0)).sin());
+            let fast: [f32; 3] = core::array::from_fn(|i|
+                (TAU * (self.solina_phase_fast + i as f32 / 3.0)).sin());
             let mut band_sum = 0.0f32;
             for (i, band) in self.ensemble_bands.iter_mut().enumerate() {
-                let mod_slow = (TAU * (self.solina_phase_slow + (i % 3) as f32 / 3.0)).sin();
-                let mod_fast = (TAU * (self.solina_phase_fast + (i % 3) as f32 / 3.0)).sin();
+                let mod_slow = slow[i % 3];
+                let mod_fast = fast[i % 3];
                 band_sum += band.process(
                     cascaded,
                     self.env_att_coeff,

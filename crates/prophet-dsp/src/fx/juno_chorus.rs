@@ -103,6 +103,8 @@ pub struct Juno106BbdChorus {
     deemphasis: [f32; 2],
     dc_prev: [f32; 2],
     dc_out: [f32; 2],
+    emphasis_coeff: f32,
+    dc_coeff: f32,
     noise_l: ProphetNoiseGen,
     noise_r: ProphetNoiseGen,
 }
@@ -127,6 +129,8 @@ impl Juno106BbdChorus {
             deemphasis: [0.0; 2],
             dc_prev: [0.0; 2],
             dc_out: [0.0; 2],
+            emphasis_coeff: 1.0 - (-2.0 * PI * 1200.0 / sr).exp(),
+            dc_coeff: (-2.0 * PI * 10.0 / sr).exp(),
             noise_l: ProphetNoiseGen::new(0xA5A5_1234),
             noise_r: ProphetNoiseGen::new(0x5A5A_8765),
         }
@@ -135,6 +139,8 @@ impl Juno106BbdChorus {
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         let sr = sample_rate.max(8000.0);
         self.sample_rate = sr;
+        self.emphasis_coeff = 1.0 - (-2.0 * PI * 1200.0 / sr).exp();
+        self.dc_coeff = (-2.0 * PI * 10.0 / sr).exp();
         self.pre_filter_l.set_cutoff(sr, 8200.0);
         self.pre_filter_r.set_cutoff(sr, 8200.0);
         self.post_filter_l.set_cutoff(sr, 7800.0);
@@ -209,7 +215,7 @@ impl Juno106BbdChorus {
         let delay_samp_r = delay_ms_r * 0.001 * self.sample_rate;
 
         // 1. Pre-filtering (Anti-Aliasing before MN3009 BBD sampling) + Asymmetric BBD Saturation
-        let c = 1.0 - (-2.0 * PI * 1200.0 / self.sample_rate).exp();
+        let c = self.emphasis_coeff;
         self.emphasis_lp[0] += c * (in_l - self.emphasis_lp[0]);
         self.emphasis_lp[1] += c * (in_r - self.emphasis_lp[1]);
         let pre_l = Self::bbd_saturate(
@@ -241,7 +247,7 @@ impl Juno106BbdChorus {
             self.deemphasis[i] += c * (wet[i] - self.deemphasis[i]);
             wet[i] = (2.0 * wet[i] + self.deemphasis[i]) / 3.0;
             let dc = wet[i] - self.dc_prev[i]
-                + (-2.0 * PI * 10.0 / self.sample_rate).exp() * self.dc_out[i];
+                + self.dc_coeff * self.dc_out[i];
             self.dc_prev[i] = wet[i];
             self.dc_out[i] = dc;
             wet[i] = dc;
