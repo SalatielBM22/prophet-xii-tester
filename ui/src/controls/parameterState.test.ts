@@ -26,19 +26,42 @@ describe('ParameterState', () => {
     state.redo(); expect(state.getSnapshot().values[23]).toBe(1234);
     transport.dispose();
   });
-  it('requires matching-client v2 ACKs and rejects reordered sequence/revision', async () => {
-    const transport = new ControlTransport('', vi.fn(accepted));
-    transport.metadata = { protocolVersion: 2, capabilities: ['parameterAck'], sessionId: 'session-a', presets: [] };
+  it('does not treat 202 enqueue or a global other-client stamp as parameter application', async () => {
+    const transport = new ControlTransport('', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ acceptedCommandId: 42 }), { status: 202 }))));
+    transport.metadata = { protocolVersion: 1, capabilities: ['parameterAck'], presets: [] };
     const state = new ParameterState(transport);
-    const first = frame({ v: 2, sessionId: 'session-a', sequence: 1, parameterRevision: 1, appliedCommandId: 0, clientId: transport.clientId });
+    const first = frame({ sequence: 1, revision: 1, monotonicNs: 1000, parameterCommandIds: Array(83).fill(0), control: { lastAppliedCommandId: 0, appliedFrame: 0 } });
     state.receive(first); state.edit(23, 900); await vi.advanceTimersByTimeAsync(16);
-    state.receive({ ...first, frames: 2, sequence: 2, clientId: 'another-client', appliedCommandId: 999 });
+    expect(state.getSnapshot().pending).toBe(1);
+    state.receive({ ...first, frames: 2, sequence: 2, monotonicNs: 2000, control: { lastAppliedCommandId: 99, appliedFrame: 1 } });
     expect(state.getSnapshot().values[23]).toBe(900); expect(state.getSnapshot().pending).toBe(1);
     const values = [...first.values]; values[23] = 899.999;
-    state.receive({ ...first, values, frames: 3, sequence: 3, parameterRevision: 2, appliedCommandId: 1 });
+    const stamps = [...first.parameterCommandIds!]; stamps[23] = 42;
+    state.receive({ ...first, values, frames: 3, sequence: 3, revision: 2, monotonicNs: 3000, parameterCommandIds: stamps, control: { lastAppliedCommandId: 99, appliedFrame: 2 } });
     expect(state.getSnapshot().values[23]).toBe(899.999); expect(state.getSnapshot().pending).toBe(0);
-    expect(state.receive({ ...first, frames: 4, sequence: 2 })).toBe(false);
+    expect(state.receive({ ...first, frames: 4, sequence: 2, monotonicNs: 4000 })).toBe(false);
     expect(state.getSnapshot().values[23]).toBe(899.999); transport.dispose();
+  });
+  it('reports a competing direct write to the same parameter as superseded, not our ACK', async () => {
+    const transport = new ControlTransport('', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ acceptedCommandId: 42 }), { status: 202 }))));
+    transport.metadata = { protocolVersion: 1, capabilities: ['parameterAck'], presets: [] };
+    const state = new ParameterState(transport);
+    const first = frame({ sequence: 1, revision: 1, monotonicNs: 1000, parameterCommandIds: Array(83).fill(0), control: { lastAppliedCommandId: 0, appliedFrame: 0 } });
+    state.receive(first); state.edit(23, 900); await vi.advanceTimersByTimeAsync(16);
+    const values = [...first.values]; values[23] = 1200;
+    const stamps = [...first.parameterCommandIds!]; stamps[23] = 43;
+    state.receive({ ...first, values, frames: 2, sequence: 2, revision: 2, monotonicNs: 2000, parameterCommandIds: stamps });
+    expect(state.getSnapshot().values[23]).toBe(1200); expect(state.getSnapshot().pending).toBe(0); expect(state.getSnapshot().error).toMatch(/superseded/);
+    transport.dispose();
+  });
+  it('rejects counter regressions until reconnect and then starts a fresh host epoch', () => {
+    const transport = new ControlTransport('', vi.fn(accepted)), state = new ParameterState(transport);
+    const first = frame({ frames: 1000, sequence: 10, revision: 5, monotonicNs: 10000, parameterCommandIds: Array(83).fill(0), control: { lastAppliedCommandId: 0, appliedFrame: 0 } });
+    state.receive(first);
+    expect(state.receive({ ...first, frames: 1, sequence: 0, revision: 0, monotonicNs: 1 })).toBe(false);
+    state.disconnect(); transport.reset();
+    expect(state.receive({ ...first, frames: 1, sequence: 0, revision: 0, monotonicNs: 1 })).toBe(true);
+    expect(state.getSnapshot().canUndo).toBe(false); transport.dispose();
   });
   it('reports timeout and ignores old-session HTTP completion', async () => {
     let release!: (response: Response) => void;
@@ -70,8 +93,8 @@ describe('typed wire boundary', () => {
     expect(decodeFrame(frame())).not.toBeNull();
     expect(decodeFrame({ ...frame(), v: 3 })).toBeNull();
     expect(decodeFrame({ ...frame(), scope: [NaN] })).toBeNull();
-    expect(decodeFrame({ ...frame(), envelopes: { amp: [] } })).toBeNull();
-    expect(decodeFrame({ ...frame(), midiLearn: { state: 'assigned', bindings: [{ cc: 255 }] } })).toBeNull();
+    expect(decodeFrame({ ...frame(), ampEnvelopes: [] })).toBeNull();
+    expect(decodeFrame({ ...frame(), midiLearn: { active: false, target: null, ccMap: [255] } })).toBeNull();
     expect(decodeFrame({ ...frame(), reverb: { enabled: 'yes' } })).toBeNull();
     expect(decodeMetadata({ presets: [{ id: 0, name: 'Preset', category: 'Test' }] }).capabilities).toEqual([]);
   });

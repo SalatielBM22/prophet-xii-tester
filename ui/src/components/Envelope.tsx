@@ -1,13 +1,14 @@
 import React, { useMemo, useRef } from 'react';
 import specs from '../param-specs.json';
+import { envelopeStageNames } from '../protocol/types';
 import type { VoiceEnvelope } from '../protocol/types';
 import { paramId, normalize, denormalized, normalized } from '../controls/parameters';
 import { programmedEnvelope } from './envelopeModel';
 interface Props {
-  values: readonly number[]; amp: boolean; sampleRate: number; voices?: VoiceEnvelope[]; levels: number[]; disabled: boolean;
+  values: readonly number[]; amp: boolean; sampleRate: number; voices?: VoiceEnvelope[]; levels: number[]; disabled: boolean; activeMask?: number;
   onChange: (id: number, value: number) => void; onBegin: (id: number) => void; onEnd: () => void;
 }
-export function Envelope({ values, amp, sampleRate, voices, levels, disabled, onChange, onBegin, onEnd }: Props) {
+export function Envelope({ values, amp, sampleRate, voices, levels, disabled, activeMask = 0, onChange, onBegin, onEnd }: Props) {
   const prefix = amp ? 'Amp' : 'Filt', kind = amp ? 'amp' : 'filter';
   const attack = values[paramId(prefix + 'Attack')], decay = values[paramId(prefix + 'Decay')], sustain = values[paramId(prefix + 'Sustain')], release = values[paramId(prefix + 'Release')];
   const model = useMemo(() => programmedEnvelope({ attack, decay, sustain, release }, sampleRate), [attack, decay, sustain, release, sampleRate]);
@@ -37,7 +38,7 @@ export function Envelope({ values, amp, sampleRate, voices, levels, disabled, on
         onKeyUp={end} onBlur={end} />; })}
     </svg>
     <small>Seconds on x-axis; Sustain held 0.25 s for illustration. Per-voice RC dispersion and retriggers require live telemetry.</small>
-    {voices ? <ol className="voice-envelopes" aria-label={`Running ${kind} envelopes`}>{voices.map(v => <li key={v.voice}>V{v.voice + 1}: {v.stage} · {v.level.toFixed(3)} · {(v.elapsedSamples / sampleRate).toFixed(3)} s{v.stageDurationSamples ? ` · ${(Math.min(1, v.elapsedSamples / v.stageDurationSamples) * 100).toFixed(0)}%` : ''}</li>)}</ol>
-      : <div className="envelope-unavailable"><small>Envelope stages unavailable on protocol v1. Levels below are instantaneous amplitudes, not stage/progress.</small><div className="voice-levels">{Array.from({ length: 12 }, (_, i) => <meter key={i} aria-label={`${prefix} voice ${i + 1} level`} value={levels[i] ?? 0} min="0" max="1" />)}</div></div>}
+    {voices ? <><small>Activity follows the kernel voice mask; inactive filter stages may be retained.</small><ol className="voice-envelopes" aria-label={`Running ${kind} envelopes`}>{voices.map((v, i) => <li key={i}>V{i + 1}: {envelopeStageNames[v.stage]} · {v.level.toFixed(3)} · {(v.elapsedSamples / sampleRate).toFixed(3)} s{v.timed ? ` · ${(v.progress * 100).toFixed(0)}%` : ' · indefinite'} · {activeMask & (1 << i) ? 'active' : 'inactive'}</li>)}</ol></>
+      : <div className="envelope-unavailable"><small>Envelope stages unavailable on this legacy host. Levels below are instantaneous amplitudes, not stage/progress.</small><div className="voice-levels">{Array.from({ length: 12 }, (_, i) => <meter key={i} aria-label={`${prefix} voice ${i + 1} level`} value={levels[i] ?? 0} min="0" max="1" />)}</div></div>}
   </div>;
 }
