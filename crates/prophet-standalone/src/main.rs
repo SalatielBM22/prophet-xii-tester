@@ -136,7 +136,10 @@ async fn command(
         },
         Request::Preset { index } if index < 10 => Command::Preset(index),
         Request::Snapshot { values }
-            if values.len() == NUM_PARAMS && values.iter().enumerate().all(|(i,v)| v.is_finite() && *v>=PARAM_SPECS[i].min && *v<=PARAM_SPECS[i].max) =>
+            if values.len() == NUM_PARAMS
+                && values.iter().enumerate().all(|(i, v)| {
+                    v.is_finite() && *v >= PARAM_SPECS[i].min && *v <= PARAM_SPECS[i].max
+                }) =>
         {
             Command::Snapshot(values.try_into().unwrap())
         }

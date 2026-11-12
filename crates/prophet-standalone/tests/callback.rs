@@ -15,6 +15,14 @@ unsafe impl GlobalAlloc for Counter {
         });
         unsafe { System.alloc(l) }
     }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        ENABLED.with(|v| {
+            if v.get() {
+                COUNT.with(|c| c.set(c.get() + 1))
+            }
+        });
+        unsafe { System.alloc_zeroed(l) }
+    }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         unsafe { System.dealloc(p, l) }
     }
@@ -91,4 +99,15 @@ fn capture_bypass_learn_and_snapshot_paths_allocate_nothing() {
     }
     ENABLED.with(|v| v.set(false));
     assert_eq!(COUNT.with(Cell::get), 0);
+}
+#[test]
+fn allocation_counter_observes_zeroed_allocations() {
+    COUNT.with(|c| c.set(0));
+    ENABLED.with(|v| v.set(true));
+    let layout = Layout::from_size_align(64, 8).unwrap();
+    let p = unsafe { std::alloc::alloc_zeroed(layout) };
+    std::hint::black_box(p);
+    unsafe { std::alloc::dealloc(p, layout) };
+    ENABLED.with(|v| v.set(false));
+    assert_eq!(COUNT.with(Cell::get), 1);
 }

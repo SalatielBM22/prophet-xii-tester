@@ -86,6 +86,13 @@ fn main() {
                             })
                             .unwrap();
                         }
+                        let mut capture_rx = if args.iter().any(|a| a == "--capture") {
+                            let (ct, cr) = rtrb::RingBuffer::new(256);
+                            p.attach_capture(ct);
+                            Some(cr)
+                        } else {
+                            None
+                        };
                         let mut out = vec![0f32; block * 2];
                         let mut times = Vec::with_capacity(count);
                         let mut hash = 0xcbf29ce484222325u64;
@@ -93,7 +100,18 @@ fn main() {
                         for _ in 0..32 {
                             p.process(&mut out, 2);
                             while tr.pop().is_ok() {}
+                            if let Some(cr) = capture_rx.as_mut() {
+                                while cr.pop().is_ok() {}
+                            }
                         }
+                        assert_eq!(
+                            p.engine
+                                .kernel
+                                .last_telemetry
+                                .active_voice_mask
+                                .count_ones(),
+                            voices as u32
+                        );
                         ALLOCS.with(|a| a.set(0));
                         for _ in 0..count {
                             TRACK.with(|a| a.set(true));
@@ -108,6 +126,9 @@ fn main() {
                                 hash = (hash ^ x.to_bits() as u64).wrapping_mul(0x100000001b3);
                             }
                             while tr.pop().is_ok() {}
+                            if let Some(cr) = capture_rx.as_mut() {
+                                while cr.pop().is_ok() {}
+                            }
                         }
                         let budget = block as f64 / sr as f64 * 1e6;
                         let mean = times.iter().sum::<f64>() / count as f64;

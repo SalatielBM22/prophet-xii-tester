@@ -149,9 +149,41 @@ fn ensemble_shimmer_sensitivity_and_freeze_are_finite() {
     }
 }
 #[test]
-fn freeze_does_not_record_new_excitation_in_predelay(){
- let mut a=SolarisCloudburstReverb::new(48000.);let mut b=SolarisCloudburstReverb::new(48000.);let mut p=isolated();p.pre_delay_ms=100.;
- for i in 0..9600 {let x=if i==0{0.2}else{0.};a.process_stereo(x,x,&p);b.process_stereo(x,x,&p);}
- p.freeze=true;for _ in 0..9600 {assert_eq!(a.process_stereo(0.,0.,&p),b.process_stereo(1.,1.,&p));}
- p.freeze=false;for _ in 0..9600 {assert_eq!(a.process_stereo(0.,0.,&p),b.process_stereo(0.,0.,&p));}
+fn freeze_does_not_record_new_excitation_in_predelay() {
+    let mut a = SolarisCloudburstReverb::new(48000.);
+    let mut b = SolarisCloudburstReverb::new(48000.);
+    let mut p = isolated();
+    p.pre_delay_ms = 100.;
+    for i in 0..9600 {
+        let x = if i == 0 { 0.2 } else { 0. };
+        a.process_stereo(x, x, &p);
+        b.process_stereo(x, x, &p);
+    }
+    p.freeze = true;
+    for _ in 0..9600 {
+        assert_eq!(a.process_stereo(0., 0., &p), b.process_stereo(1., 1., &p));
+    }
+    p.freeze = false;
+    for _ in 0..9600 {
+        assert_eq!(a.process_stereo(0., 0., &p), b.process_stereo(0., 0., &p));
+    }
+}
+#[test]
+fn fresh_zero_wet_stays_dormant_and_natural_tails_eventually_sleep() {
+    let mut dry = SolarisCloudburstReverb::new(48000.);
+    let mut p = isolated();
+    p.wet_mix = 0.;
+    for _ in 0..9600 {
+        assert_eq!(dry.process_stereo(0.3, 0.3, &p), (0.3, 0.3));
+    }
+    assert!(dry.is_dormant());
+    for sr in [48000., 96000.] {
+        let mut r = SolarisCloudburstReverb::new(sr);
+        p = isolated();
+        for i in 0..(sr * 10.) as usize {
+            let (l, rr) = r.process_stereo(if i == 0 { 0.2 } else { 0. }, 0., &p);
+            assert!(l.is_finite() && rr.is_finite() && !l.is_subnormal() && !rr.is_subnormal());
+        }
+        assert!(r.is_dormant());
+    }
 }

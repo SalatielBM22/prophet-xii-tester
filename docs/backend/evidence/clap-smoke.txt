@@ -1,0 +1,1 @@
+PASS: CLAP descriptor, 85 parameters, 1632-byte state save/restore, MIDI at offset 17, stereo energy 9.301657, latency 16 samples

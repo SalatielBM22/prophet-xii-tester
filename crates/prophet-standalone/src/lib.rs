@@ -298,8 +298,12 @@ impl AudioProcessor {
             self.command(command);
             if let Some(stamp) = stamp {
                 match command {
-                    Command::Param { id, .. } if id < NUM_PARAMS => self.parameter_command_ids[id] = stamp.id,
-                    Command::Preset(_) | Command::Snapshot(_) => self.parameter_command_ids.fill(stamp.id),
+                    Command::Param { id, .. } if id < NUM_PARAMS => {
+                        self.parameter_command_ids[id] = stamp.id
+                    }
+                    Command::Preset(_) | Command::Snapshot(_) => {
+                        self.parameter_command_ids.fill(stamp.id)
+                    }
                     _ => {}
                 }
                 self.last_command_id = stamp.id;
@@ -374,7 +378,7 @@ impl AudioProcessor {
                 late_commands: self.late_commands,
                 dropped_telemetry: self.dropped_telemetry,
                 revision: p.revision.load(Ordering::Relaxed),
-                parameter_command_ids:self.parameter_command_ids,
+                parameter_command_ids: self.parameter_command_ids,
                 learn_active: p.midi_learn_active.load(Ordering::Relaxed),
                 learn_target: p.midi_learn_target_param.load(Ordering::Relaxed),
                 cc_map: core::array::from_fn(|i| p.cc_map[i].load(Ordering::Relaxed)),

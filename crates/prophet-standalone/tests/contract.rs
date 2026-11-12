@@ -92,7 +92,7 @@ fn queued_parameter_precedes_note_on_and_revisions_are_observable() {
         data2: 100,
     })
     .unwrap();
-    let mut out = [0.; 512];
+    let mut out = [0f32; 512];
     p.process(&mut out, 2);
     assert_eq!(
         p.engine
@@ -116,7 +116,7 @@ fn capture_is_contiguous_bounded_and_gaps_have_sequence_numbers() {
     let (_, _, mut p) = processor();
     let (ct, mut cr) = rtrb::RingBuffer::new(4);
     p.attach_capture(ct);
-    let mut out = [0.; 512];
+    let mut out = [0f32; 512];
     p.process(&mut out, 2);
     p.process(&mut out, 2);
     for i in 0..4 {
@@ -145,7 +145,7 @@ fn command_wait_and_bypass_status_are_measured() {
         queued: now - Duration::from_millis(1),
     })
     .unwrap();
-    let mut out = [0.; 512];
+    let mut out = [0f32; 512];
     for _ in 0..9 {
         p.process(&mut out, 2);
     }
@@ -163,10 +163,38 @@ fn command_wait_and_bypass_status_are_measured() {
 #[test]
 fn invalid_callbacks_produce_silence_instead_of_dividing_by_zero() {
     let (_, _, mut p) = processor();
-    let mut out = [1.; 3];
+    let mut out = [1f32; 3];
     p.process(&mut out, 0);
     assert_eq!(out, [0.; 3]);
     out.fill(1.);
     p.process(&mut out, 2);
     assert_eq!(out, [0.; 3]);
+}
+#[test]
+fn invalid_parameter_values_preserve_last_good_state() {
+    let (_, _, mut p) = processor();
+    let bank = &p.engine.ipc.params;
+    for spec in &prophet_params::PARAM_SPECS {
+        let value = bank.get(spec.id);
+        assert!(
+            value.is_finite() && value >= spec.min && value <= spec.max,
+            "{}",
+            spec.name
+        );
+    }
+    let old = bank.get(ParamId::FilterCutoff);
+    let revision = bank.revision.load(Ordering::Relaxed);
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        bank.set(ParamId::FilterCutoff, value);
+        assert_eq!(bank.get(ParamId::FilterCutoff), old);
+        assert_eq!(bank.revision.load(Ordering::Relaxed), revision);
+    }
+    p.command(Command::Trimpot {
+        voice: 0,
+        field: 0,
+        value: f32::NAN,
+    });
+    let mut out = [0f32; 512];
+    p.process(&mut out, 2);
+    assert!(out.iter().all(|x| x.is_finite()));
 }

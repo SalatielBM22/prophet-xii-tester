@@ -547,7 +547,13 @@ impl SolarisCloudburstReverb {
         {
             self.clear_history();
         }
-        let mono_in = if params.freeze { 0.0 } else { 0.5 * (in_l + in_r) * self.enable_gain };
+        // At zero wet, advance the existing tail without feeding hidden new
+        // excitation. A fresh dry instrument can remain dormant (#1).
+        let mono_in = if params.freeze || params.wet_mix <= 0.0 {
+            0.0
+        } else {
+            0.5 * (in_l + in_r) * self.enable_gain
+        };
         if self.dormant && (mono_in == 0.0 || params.freeze) {
             return self.mix(in_l, in_r, 0.0, 0.0, params);
         }

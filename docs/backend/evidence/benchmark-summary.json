@@ -1,0 +1,56 @@
+[
+  {
+    "file": "baseline-rt-256.csv",
+    "cases": 144,
+    "callback_allocations": 0,
+    "subnormal_outputs": 0,
+    "cases_with_deadline_misses": 39,
+    "measured_deadline_misses": 2440,
+    "callbacks": 14400
+  },
+  {
+    "file": "cached-rt-256.csv",
+    "cases": 144,
+    "callback_allocations": 0,
+    "subnormal_outputs": 0,
+    "cases_with_deadline_misses": 38,
+    "measured_deadline_misses": 2422,
+    "callbacks": 14400
+  },
+  {
+    "file": "candidate-wet0-rt-256.csv",
+    "cases": 144,
+    "callback_allocations": 0,
+    "subnormal_outputs": 0,
+    "cases_with_deadline_misses": 54,
+    "measured_deadline_misses": 2515,
+    "callbacks": 14400
+  },
+  {
+    "file": "candidate-rt-256.csv",
+    "cases": 144,
+    "callback_allocations": 0,
+    "subnormal_outputs": 0,
+    "cases_with_deadline_misses": 45,
+    "measured_deadline_misses": 2453,
+    "callbacks": 14400
+  },
+  {
+    "file": "candidate-capture-rt-64.csv",
+    "cases": 144,
+    "callback_allocations": 0,
+    "subnormal_outputs": 0,
+    "cases_with_deadline_misses": 47,
+    "measured_deadline_misses": 2469,
+    "callbacks": 14400
+  },
+  {
+    "file": "candidate-capture-rt-512.csv",
+    "cases": 144,
+    "callback_allocations": 0,
+    "subnormal_outputs": 0,
+    "cases_with_deadline_misses": 33,
+    "measured_deadline_misses": 2383,
+    "callbacks": 14400
+  }
+]
