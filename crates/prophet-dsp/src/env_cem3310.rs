@@ -5,6 +5,7 @@
 // - Exponential Decay/Release with time constants from 1 ms to 25 s
 // - Per-voice deterministic RC tolerance dispersion (+/- 4%) per OB-Xd (https://github.com/2DaT/Obxd)
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnvStage {
     Idle,
@@ -20,6 +21,7 @@ pub enum EnvStage {
 pub struct Cem3310Envelope {
     pub stage: EnvStage,
     pub level: f32,
+    pub stage_elapsed_samples: u64,
     pub sample_rate: f32,
     /// Attack time in seconds [0.001, 25.0]
     pub attack_sec: f32,
@@ -47,6 +49,7 @@ impl Cem3310Envelope {
         let mut env = Self {
             stage: EnvStage::Idle,
             level: 0.0,
+            stage_elapsed_samples: 0,
             sample_rate: sample_rate.max(8000.0),
             attack_sec: 0.005,
             decay_sec: 0.25,
@@ -111,12 +114,16 @@ impl Cem3310Envelope {
             self.level = 0.0;
         }
         self.stage = EnvStage::Attack;
+        self.stage_elapsed_samples = 0;
     }
 
     /// Triggers Note Off, transitioning immediately from current voltage into Release stage.
     #[inline(always)]
     pub fn note_off(&mut self) {
         if self.stage != EnvStage::Idle {
+            if self.stage != EnvStage::Release {
+                self.stage_elapsed_samples = 0;
+            }
             self.stage = EnvStage::Release;
         }
     }
@@ -129,6 +136,7 @@ impl Cem3310Envelope {
     /// Advances the CEM3310 RC state machine by 1 sample and returns output in `[0.0, 1.0]`.
     #[inline(always)]
     pub fn process_sample(&mut self) -> f32 {
+        let previous_stage = self.stage;
         match self.stage {
             EnvStage::Idle => {
                 self.level = 0.0;
@@ -160,8 +168,65 @@ impl Cem3310Envelope {
                 }
             }
         }
+        if self.stage != previous_stage {
+            self.stage_elapsed_samples = 0;
+        } else if self.stage != EnvStage::Idle {
+            self.stage_elapsed_samples = self.stage_elapsed_samples.saturating_add(1);
+        }
         self.level.clamp(0.0, 1.0)
     }
+
+    /// Progress from elapsed samples and remaining RC threshold time, not amplitude.
+    /// Sustain has no finite end: progress=0 and timed=false.
+    pub fn telemetry(&self) -> EnvelopeTelemetry {
+        let (distance, threshold, coefficient, timed) = match self.stage {
+            EnvStage::Attack => (
+                Self::ATTACK_TARGET - self.level,
+                Self::ATTACK_TARGET - 1.0,
+                self.attack_coeff,
+                true,
+            ),
+            EnvStage::Decay => (
+                self.level - self.sustain_level + Self::EXP_EPSILON,
+                Self::EXP_EPSILON,
+                self.decay_coeff,
+                true,
+            ),
+            EnvStage::Release => (
+                self.level + Self::EXP_EPSILON,
+                0.0001 + Self::EXP_EPSILON,
+                self.release_coeff,
+                true,
+            ),
+            _ => (0.0, 1.0, 0.0, false),
+        };
+        let remaining = if timed && distance > threshold {
+            ((distance / threshold).ln() / -(1.0 - coefficient).ln()).max(0.0)
+        } else {
+            0.0
+        };
+        let elapsed = self.stage_elapsed_samples as f32;
+        EnvelopeTelemetry {
+            stage: self.stage as u8,
+            elapsed_samples: self.stage_elapsed_samples,
+            level: self.level,
+            progress: if timed {
+                elapsed / (elapsed + remaining).max(1.0)
+            } else {
+                0.0
+            },
+            timed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EnvelopeTelemetry {
+    pub stage: u8,
+    pub elapsed_samples: u64,
+    pub level: f32,
+    pub progress: f32,
+    pub timed: bool,
 }
 
 /// Prophet-10 Rev3 Global LFO + Mod Wheel Routing Engine.

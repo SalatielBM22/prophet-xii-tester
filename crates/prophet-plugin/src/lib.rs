@@ -5,6 +5,10 @@ use prophet_params::{AtomicParamBank, ParamId, NUM_PARAMS, PARAM_SPECS};
 use std::sync::Arc;
 #[derive(Params)]
 struct SynthParams {
+    #[id = "reverb_enabled"]
+    reverb_enabled: BoolParam,
+    #[id = "reverb_kill_tail"]
+    reverb_kill_tail: BoolParam,
     #[id = "p0"]
     p0: FloatParam,
     #[id = "p1"]
@@ -176,6 +180,8 @@ impl Default for SynthParams {
     fn default() -> Self {
         let bank = AtomicParamBank::new();
         Self {
+            reverb_enabled: BoolParam::new("Reverb Enabled", true),
+            reverb_kill_tail: BoolParam::new("Reverb Kill Tail (off = Spill)", false),
             p0: FloatParam::new(
                 PARAM_SPECS[0].name,
                 bank.get(ParamId::from_index(0).unwrap()),
@@ -721,6 +727,15 @@ impl Default for Prophet {
 }
 impl Prophet {
     fn pull(&mut self) {
+        use prophet_dsp::fx::solaris_reverb::ReverbTailPolicy;
+        self.engine.ipc.params.set_reverb_bypass(
+            self.params.reverb_enabled.value(),
+            if self.params.reverb_kill_tail.value() {
+                ReverbTailPolicy::Kill
+            } else {
+                ReverbTailPolicy::Spill
+            },
+        );
         let value = self.params.p0.value();
         if value != self.last_host[0] {
             self.engine

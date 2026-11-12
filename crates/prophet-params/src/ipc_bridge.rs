@@ -4,9 +4,9 @@
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use prophet_dsp::fx::juno_chorus::JunoChorusMode;
-use prophet_dsp::fx::solaris_reverb::{EnsembleMode, SolarisReverbParams};
+use prophet_dsp::fx::solaris_reverb::{EnsembleMode, ReverbTailPolicy, SolarisReverbParams};
 use prophet_dsp::osc_cem3340::{OscAWaveforms, OscBWaveforms};
 use prophet_dsp::oversample::OversampleFactor;
 use prophet_dsp::voice::{GlideMode, PolyModParams, SynthVoiceParams, VoiceTrimpots, NUM_VOICES};
@@ -142,6 +142,9 @@ pub const NUM_PARAMS: usize = 83;
 /// Lock-free Atomic Parameter Bank shared between the Audio Thread and UI/Host Thread.
 pub struct AtomicParamBank {
     pub values: [AtomicF32; NUM_PARAMS],
+    pub revision: AtomicU64,
+    pub reverb_enabled: AtomicBool,
+    pub reverb_tail: AtomicU32,
     /// Individual per-voice calibration trimpots (`12` voices x `4` offsets)
     pub voice_vco_a_cents: [AtomicF32; NUM_VOICES],
     pub voice_vco_b_cents: [AtomicF32; NUM_VOICES],
@@ -163,7 +166,7 @@ impl AtomicParamBank {
     pub fn new() -> Self {
         let defaults = SynthVoiceParams::default();
         let rev_defaults = SolarisReverbParams::default();
-        let values = core::array::from_fn(|_| AtomicF32::new(0.0));
+        let values = core::array::from_fn(|i| AtomicF32::new(PARAM_SPECS[i].min));
         let voice_vco_a_cents = core::array::from_fn(|i| {
             AtomicF32::new(VoiceTrimpots::from_voice_index(i).vco_a_cents)
         });
@@ -184,6 +187,9 @@ impl AtomicParamBank {
 
         let bank = Self {
             values,
+            revision: AtomicU64::new(0),
+            reverb_enabled: AtomicBool::new(true),
+            reverb_tail: AtomicU32::new(0),
             voice_vco_a_cents,
             voice_vco_b_cents,
             voice_vcf_pct,
@@ -205,7 +211,66 @@ impl AtomicParamBank {
     pub fn set(&self, id: ParamId, val: f32) {
         let spec = &PARAM_SPECS[id as usize];
         if val.is_finite() {
-            self.values[id as usize].store(val.clamp(spec.min, spec.max));
+            let value = val.clamp(spec.min, spec.max);
+            let value = if spec.integer { value.round() } else { value };
+            if self.values[id as usize].load().to_bits() != value.to_bits() {
+                self.values[id as usize].store(value);
+                self.revision.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// MIDI CC64 and channel-mode CC120/123 are reserved by the engine.
+    pub fn learnable_cc(cc: usize) -> bool {
+        cc < 128 && !matches!(cc, 64 | 120 | 123)
+    }
+    pub fn begin_learn(&self, id: usize) -> bool {
+        if id >= NUM_PARAMS {
+            return false;
+        }
+        self.midi_learn_target_param
+            .store(id as u32, Ordering::Relaxed);
+        self.midi_learn_active.store(true, Ordering::Relaxed);
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+    pub fn cancel_learn(&self) {
+        self.midi_learn_active.store(false, Ordering::Relaxed);
+        self.midi_learn_target_param
+            .store(u32::MAX, Ordering::Relaxed);
+        self.revision.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn unlearn(&self, id: usize) -> bool {
+        if id >= NUM_PARAMS {
+            return false;
+        }
+        for mapping in &self.cc_map {
+            if mapping.load(Ordering::Relaxed) == id as u32 {
+                mapping.store(u32::MAX, Ordering::Relaxed);
+            }
+        }
+        if self.midi_learn_target_param.load(Ordering::Relaxed) == id as u32 {
+            self.cancel_learn();
+        }
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+    pub fn remap(&self, cc: usize, id: usize) -> bool {
+        if !Self::learnable_cc(cc) || id >= NUM_PARAMS {
+            return false;
+        }
+        self.unlearn(id);
+        self.cc_map[cc].store(id as u32, Ordering::Relaxed);
+        self.cancel_learn();
+        true
+    }
+
+    pub fn set_reverb_bypass(&self, enabled: bool, tail: ReverbTailPolicy) {
+        let policy = u32::from(tail == ReverbTailPolicy::Kill);
+        let changed = self.reverb_enabled.swap(enabled, Ordering::Relaxed) != enabled;
+        let changed = (self.reverb_tail.swap(policy, Ordering::Relaxed) != policy) || changed;
+        if changed {
+            self.revision.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -306,6 +371,7 @@ impl AtomicParamBank {
         self.set(ParamId::ReverbModSpeed, rp.mod_speed_hz);
         self.set(ParamId::ReverbFreeze, if rp.freeze { 1.0 } else { 0.0 });
         self.set(ParamId::ReverbWet, rp.wet_mix);
+        self.set_reverb_bypass(rp.enabled, rp.bypass_tail);
 
         self.set(ParamId::OversamplingMode, oversample_idx);
         self.set(ParamId::MasterGain, 0.65);
@@ -440,6 +506,12 @@ impl AtomicParamBank {
         rp.mod_speed_hz = self.get(ParamId::ReverbModSpeed);
         rp.freeze = self.get(ParamId::ReverbFreeze) >= 0.5;
         rp.wet_mix = self.get(ParamId::ReverbWet);
+        rp.enabled = self.reverb_enabled.load(Ordering::Relaxed);
+        rp.bypass_tail = if self.reverb_tail.load(Ordering::Relaxed) == 1 {
+            ReverbTailPolicy::Kill
+        } else {
+            ReverbTailPolicy::Spill
+        };
 
         let chorus_mode = match self.get(ParamId::ChorusMode).round() as i32 {
             0 => JunoChorusMode::Off,

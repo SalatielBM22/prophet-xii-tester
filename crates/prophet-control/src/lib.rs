@@ -129,20 +129,15 @@ impl ProphetXiiPlugin {
                     self.panic();
                     return;
                 }
-                // Check if MIDI Learn is waiting to bind a CC knob
-                if self.ipc.params.midi_learn_active.load(Ordering::Relaxed) {
+                if self.ipc.params.midi_learn_active.load(Ordering::Relaxed)
+                    && !(cc == 74 && ch > 0)
+                {
                     let target = self
                         .ipc
                         .params
                         .midi_learn_target_param
                         .load(Ordering::Relaxed);
-                    if target < (ipc_bridge::NUM_PARAMS as u32) {
-                        self.ipc.params.cc_map[cc].store(target, Ordering::Relaxed);
-                        self.ipc
-                            .params
-                            .midi_learn_active
-                            .store(false, Ordering::Relaxed);
-                    }
+                    self.ipc.params.remap(cc, target as usize);
                 }
 
                 // MPE CC 74 (Slide / Timbre) per-voice routing on member channels 1..15

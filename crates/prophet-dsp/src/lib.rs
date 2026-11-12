@@ -77,6 +77,8 @@ pub struct KernelTelemetrySnapshot {
     pub voice_vca_levels: [f32; NUM_VOICES],
     pub voice_filt_env_levels: [f32; NUM_VOICES],
     pub voice_midi_notes: [u8; NUM_VOICES],
+    pub amp_envelopes: [env_cem3310::EnvelopeTelemetry; NUM_VOICES],
+    pub filter_envelopes: [env_cem3310::EnvelopeTelemetry; NUM_VOICES],
     pub scope_samples_l: [f32; MAX_BLOCK_SIZE],
     pub scope_samples_r: [f32; MAX_BLOCK_SIZE],
     pub dsp_load_percent: f32,
@@ -89,6 +91,8 @@ impl Default for KernelTelemetrySnapshot {
             voice_vca_levels: [0.0; NUM_VOICES],
             voice_filt_env_levels: [0.0; NUM_VOICES],
             voice_midi_notes: [0; NUM_VOICES],
+            amp_envelopes: [env_cem3310::EnvelopeTelemetry::default(); NUM_VOICES],
+            filter_envelopes: [env_cem3310::EnvelopeTelemetry::default(); NUM_VOICES],
             scope_samples_l: [0.0; MAX_BLOCK_SIZE],
             scope_samples_r: [0.0; MAX_BLOCK_SIZE],
             dsp_load_percent: 0.0,
@@ -166,8 +170,10 @@ impl ProphetXiiKernel {
         for v in &mut self.allocator.voices {
             v.amp_env.stage = env_cem3310::EnvStage::Idle;
             v.amp_env.level = 0.0;
+            v.amp_env.stage_elapsed_samples = 0;
             v.filter_env.stage = env_cem3310::EnvStage::Idle;
             v.filter_env.level = 0.0;
+            v.filter_env.stage_elapsed_samples = 0;
             v.vco.reset(0.0, 0.0);
             v.vcf.reset();
             v.oversampler.reset();
@@ -192,6 +198,16 @@ impl ProphetXiiKernel {
         self.reverb.set_sample_rate(sr);
         self.cutoff_smoother.set_time_ms(4.0, sr);
         self.res_smoother.set_time_ms(4.0, sr);
+    }
+
+    /// Called at bounded diagnostic cadence, not per audio sample.
+    pub fn telemetry_snapshot(&self) -> KernelTelemetrySnapshot {
+        let mut snapshot = self.last_telemetry;
+        for (i, v) in self.allocator.voices.iter().enumerate() {
+            snapshot.amp_envelopes[i] = v.amp_env.telemetry();
+            snapshot.filter_envelopes[i] = v.filter_env.telemetry();
+        }
+        snapshot
     }
 
     /// Hard Real-Time Block Processor (`num_samples <= MAX_BLOCK_SIZE`).

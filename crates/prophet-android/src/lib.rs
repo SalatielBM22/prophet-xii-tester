@@ -56,6 +56,10 @@ mod android {
         Preset(usize),
         Panic,
         Learn(usize),
+        CancelLearn,
+        Unlearn(usize),
+        Remap(usize, usize),
+        ReverbBypass(bool, bool),
         Snapshot([f32; NUM_PARAMS]),
         Trimpot(usize, usize, f32),
     }
@@ -69,6 +73,13 @@ mod android {
         frames: u64,
         misses: u64,
         sr: f32,
+        revision: u64,
+        learn_active: bool,
+        learn_target: u32,
+        cc_map: [u32; 128],
+        reverb_enabled: bool,
+        reverb_kill: bool,
+        reverb_dormant: bool,
     }
     struct Audio {
         engine: ProphetXiiPlugin,
@@ -118,22 +129,33 @@ mod android {
                         e.ipc.params.set(id, v)
                     }
                 }
-                Command::Midi(s, d1, d2) => e.handle_midi_message(s, d1, d2),
+                Command::Midi(s, d1, d2) => {
+                    e.sync_parameters();
+                    e.handle_midi_message(s, d1, d2);
+                }
                 Command::Preset(i) => {
                     e.panic();
                     e.load_preset(i)
                 }
                 Command::Panic => e.panic(),
                 Command::Learn(id) => {
-                    e.ipc
-                        .params
-                        .midi_learn_target_param
-                        .store(id as u32, Ordering::Relaxed);
-                    e.ipc
-                        .params
-                        .midi_learn_active
-                        .store(true, Ordering::Relaxed);
+                    e.ipc.params.begin_learn(id);
                 }
+                Command::CancelLearn => e.ipc.params.cancel_learn(),
+                Command::Unlearn(id) => {
+                    e.ipc.params.unlearn(id);
+                }
+                Command::Remap(cc, id) => {
+                    e.ipc.params.remap(cc, id);
+                }
+                Command::ReverbBypass(enabled, kill) => e.ipc.params.set_reverb_bypass(
+                    enabled,
+                    if kill {
+                        prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Kill
+                    } else {
+                        prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Spill
+                    },
+                ),
                 Command::Snapshot(v) => {
                     for (i, x) in v.into_iter().enumerate() {
                         e.ipc.params.set(ParamId::from_index(i).unwrap(), x)
@@ -178,7 +200,7 @@ mod android {
         if a.frames - a.published >= (sr / 25.0) as u64 {
             let p = &a.engine.ipc.params;
             let t = Telemetry {
-                kernel: a.engine.kernel.last_telemetry,
+                kernel: a.engine.kernel.telemetry_snapshot(),
                 scope: std::array::from_fn(|i| a.scope[(a.pos + i) % 1024]),
                 values: std::array::from_fn(|i| p.get(ParamId::from_index(i).unwrap())),
                 trimpots: std::array::from_fn(|i| {
@@ -193,6 +215,14 @@ mod android {
                 frames: a.frames,
                 misses: a.misses,
                 sr,
+                revision: p.revision.load(Ordering::Relaxed),
+                learn_active: p.midi_learn_active.load(Ordering::Relaxed),
+                learn_target: p.midi_learn_target_param.load(Ordering::Relaxed),
+                cc_map: std::array::from_fn(|i| p.cc_map[i].load(Ordering::Relaxed)),
+                reverb_enabled: a.engine.kernel.reverb_params.enabled,
+                reverb_kill: a.engine.kernel.reverb_params.bypass_tail
+                    == prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Kill,
+                reverb_dormant: a.engine.kernel.reverb.is_dormant(),
             };
             let _ = a.telemetry.push(t);
             a.published = a.frames;
@@ -317,6 +347,18 @@ mod android {
             }
             2 if (0..10).contains(&a) => Command::Preset(a as usize),
             3 => Command::Panic,
+            6 => Command::CancelLearn,
+            7 if a >= 0 && (a as usize) < NUM_PARAMS => Command::Unlearn(a as usize),
+            8 if a >= 0
+                && prophet_params::AtomicParamBank::learnable_cc(a as usize)
+                && b >= 0
+                && (b as usize) < NUM_PARAMS =>
+            {
+                Command::Remap(a as usize, b as usize)
+            }
+            9 if (0..=1).contains(&a) && (0..=1).contains(&b) => {
+                Command::ReverbBypass(a == 1, b == 1)
+            }
             5 if a >= 0 && (a as usize) < NUM_PARAMS => Command::Learn(a as usize),
             4 if (0..12).contains(&a) && (0..4).contains(&b) => {
                 Command::Trimpot(a as usize, b as usize, value)
@@ -366,7 +408,8 @@ mod android {
                     last = Some(t);
                 }
                 if let Some(t) = last {
-                    result=serde_json::json!({"v":1,"ready":true,"sampleRate":t.sr,"values":t.values.as_slice(),"scope":t.scope.as_slice(),"trimpots":t.trimpots,"activeVoiceMask":t.kernel.active_voice_mask,"voiceVcaLevels":t.kernel.voice_vca_levels,"voiceFiltEnvLevels":t.kernel.voice_filt_env_levels,"voiceMidiNotes":t.kernel.voice_midi_notes,"dspLoadPercent":t.cpu,"frames":t.frames,"deadlineMisses":t.misses,"underruns":unsafe{AAudioStream_getXRunCount(h.stream)}}).to_string();
+                    let envelope = |e: &prophet_dsp::env_cem3310::EnvelopeTelemetry| serde_json::json!({"stage":e.stage,"elapsedSamples":e.elapsed_samples,"progress":e.progress,"level":e.level,"timed":e.timed});
+                    result=serde_json::json!({"v":1,"ready":true,"sampleRate":t.sr,"values":t.values.as_slice(),"scope":t.scope.as_slice(),"trimpots":t.trimpots,"activeVoiceMask":t.kernel.active_voice_mask,"voiceVcaLevels":t.kernel.voice_vca_levels,"voiceFiltEnvLevels":t.kernel.voice_filt_env_levels,"voiceMidiNotes":t.kernel.voice_midi_notes,"dspLoadPercent":t.cpu,"frames":t.frames,"deadlineMisses":t.misses,"revision":t.revision,"ampEnvelopes":t.kernel.amp_envelopes.iter().map(envelope).collect::<Vec<_>>(),"filterEnvelopes":t.kernel.filter_envelopes.iter().map(envelope).collect::<Vec<_>>(),"midiLearn":{"active":t.learn_active,"target":if (t.learn_target as usize)<NUM_PARAMS{Some(t.learn_target)}else{None},"ccMap":t.cc_map.iter().map(|v|if (*v as usize)<NUM_PARAMS{Some(*v)}else{None}).collect::<Vec<_>>()},"reverb":{"enabled":t.reverb_enabled,"tail":if t.reverb_kill{"kill"}else{"spill"},"dormant":t.reverb_dormant},"underruns":unsafe{AAudioStream_getXRunCount(h.stream)}}).to_string();
                 }
             }
         }
