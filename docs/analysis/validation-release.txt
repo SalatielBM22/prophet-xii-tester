@@ -1,0 +1,42 @@
+   Compiling prophet-analysis v1.0.0 (/workspace/prophet-xii/crates/prophet-analysis)
+    Finished `release` profile [optimized] target(s) in 15.22s
+     Running unittests src/lib.rs (target/release/build/prophet-analysis/5667971b914572c0/out/prophet_analysis-5667971b914572c0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/accuracy.rs (target/release/build/prophet-analysis/ec20ba18f3f5b251/out/accuracy-ec20ba18f3f5b251)
+
+running 15 tests
+test coherent_gain_enbw_and_psd_parseval ... ok
+test blackman_harris_reduces_far_sidelobes ... ok
+test dc_and_nyquist_are_not_doubled ... ok
+test invalid_configuration_is_rejected ... ok
+test impulse_silence_subnormal_and_invalid_samples ... ok
+test off_bin_scalloping_and_two_tone_separation ... ok
+test power_averaging_and_configurable_peak_hold ... ok
+test realfft_forward_inverse_roundtrip_at_all_supported_sizes ... ok
+test spectrum_agrees_with_independent_direct_dft ... ok
+test stft_contiguous_packet_partition_and_gap_reset ... ok
+test noise_power_and_pink_spectral_tilt ... ok
+test transfer_unwrap_mask_cancellation_and_tail_diagnostic ... ok
+test calibrated_sines_all_sizes_rates_and_windows ... ok
+test transfer_complex_interpolation_matches_dtft_at_48_and_96k ... ok
+test resonant_transfer_dtft_agreement_and_tail ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/allocations.rs (target/release/build/prophet-analysis/a50bc891083076b0/out/allocations-a50bc891083076b0)
+
+running 1 test
+test no_allocations_after_planning_in_spectrum_stft_transfer ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests prophet_analysis
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

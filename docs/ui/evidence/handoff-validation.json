@@ -1,0 +1,367 @@
+{
+  "stopped_at_user_request": true,
+  "backend_checkpoint": "211c4f44dc735a89047dad32e725e39b9b8c9b68",
+  "last_ui_unit_tests": {
+    "passed": 66,
+    "failed": 0,
+    "note": "last completed run; no new tests after stop request"
+  },
+  "native_controls_unit_tests": {
+    "passed": 53,
+    "failed": 0
+  },
+  "analysis_native_feature_web": {
+    "passed": 18,
+    "failed": 0
+  },
+  "wasm_node": {
+    "status": "PASS",
+    "node": "v24.22.1",
+    "wasmScenarios": 27,
+    "wasmSha256": "e83b4436e85b289df8ba81560e2cf6a2698ced7551efbe7dd43b1945c2f1be6c",
+    "checks": [
+      "actual Rust WASM at 2048/4096/8192 and 44.1/48/96kHz",
+      "Hann/BH/Kaiser coherent-gain amplitude and Rust window metrics",
+      "timestamps and sequence",
+      "stable pointers/no packet memory growth",
+      "short chunks, gaps and stale packets",
+      "invalid arguments and samples",
+      "typed-array refresh after memory.grow"
+    ]
+  },
+  "reports": {
+    "native_integration_13": {
+      "status": "PASS",
+      "source": "/workspace/.prophet-cloud/task-a/e2e-native/e2e-native.json",
+      "sha256": "5abab30b98b0b71b8d67b0b421e2a27df54be32dedf6c21704f230abc68c48bc",
+      "cases": [
+        {
+          "case": "numeric",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "drag_undo",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "touch_keyboard",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "delayed_controls",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "dependencies",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_metadata_factory_reset",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_acknowledgments",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_202_is_not_application",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_midi_lifecycle",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_envelopes",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_reverb",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "reconnect",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_capture",
+          "status": "PASS",
+          "error": ""
+        }
+      ],
+      "observations": {
+        "factory": {
+          "preset": 7,
+          "cutoff": 1650.0,
+          "metadataValues": 83
+        },
+        "ackIds": {
+          "unrelated": 139,
+          "own": 140,
+          "externalSuperseding": 141
+        },
+        "midi": {
+          "reservedRejected": [
+            64,
+            120,
+            123
+          ],
+          "globalChannelsTested": [
+            0,
+            2
+          ],
+          "mpeMember74DoesNotCapture": true
+        },
+        "envelopes": {
+          "sampleRate": 48000,
+          "voices": 12,
+          "elapsedDelta": 6144,
+          "frameDelta": 6144,
+          "retriggerElapsed": 1024,
+          "actualFields": [
+            "stage",
+            "elapsedSamples",
+            "level",
+            "progress",
+            "timed"
+          ]
+        },
+        "reverb": {
+          "spill": {
+            "dormant": false,
+            "enableGain": 0.0,
+            "enabled": false,
+            "tail": "spill"
+          },
+          "kill": {
+            "dormant": true,
+            "enableGain": 0.0,
+            "enabled": false,
+            "tail": "kill"
+          },
+          "enabled": {
+            "dormant": false,
+            "enableGain": 1.0,
+            "enabled": true,
+            "tail": "kill"
+          },
+          "scope": "actual state transitions; not calibrated RT60 or audible-device qualification"
+        },
+        "capture": {
+          "sampleRate": 48000,
+          "messages": 24,
+          "blocks": 104,
+          "gapCount": 1,
+          "testSuppressedMessages": 1,
+          "nonzeroSamples": 5912,
+          "maxChunkSamples": 64,
+          "capturedBlocksSha256": "5b2ab9d70c494265f6b86481628ee2b5e646cf5922710368f73177ca9befd2c6",
+          "scope": "raw real PCM transport acceptance; UI/WASM STFT reset checked separately when integrated"
+        }
+      }
+    },
+    "controls_only_11": {
+      "status": "PASS",
+      "source": "/workspace/.prophet-cloud/task-a/e2e-native-controls-only/e2e-native.json",
+      "sha256": "429627829054a80f5cd1e9c8415af633bf81af798d9a689efb40984691d63156",
+      "cases": [
+        {
+          "case": "numeric",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "drag_undo",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "touch_keyboard",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_metadata_factory_reset",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_acknowledgments",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_202_is_not_application",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_midi_lifecycle",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_envelopes",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_reverb",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "reconnect",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_watchdog",
+          "status": "PASS",
+          "error": ""
+        }
+      ],
+      "observations": {
+        "factory": {
+          "preset": 7,
+          "cutoff": 1650.0,
+          "metadataValues": 83
+        },
+        "ackIds": {
+          "unrelated": 52,
+          "own": 53,
+          "externalSuperseding": 54
+        },
+        "midi": {
+          "reservedRejected": [
+            64,
+            120,
+            123
+          ],
+          "globalChannelsTested": [
+            0,
+            2
+          ],
+          "mpeMember74DoesNotCapture": true
+        },
+        "envelopes": {
+          "sampleRate": 48000,
+          "voices": 12,
+          "elapsedDelta": 6144,
+          "frameDelta": 6144,
+          "retriggerElapsed": 2304,
+          "actualFields": [
+            "stage",
+            "elapsedSamples",
+            "level",
+            "progress",
+            "timed"
+          ]
+        },
+        "reverb": {
+          "spill": {
+            "dormant": false,
+            "enableGain": 0.0,
+            "enabled": false,
+            "tail": "spill"
+          },
+          "kill": {
+            "dormant": true,
+            "enableGain": 0.0,
+            "enabled": false,
+            "tail": "kill"
+          },
+          "enabled": {
+            "dormant": false,
+            "enableGain": 1.0,
+            "enabled": true,
+            "tail": "kill"
+          },
+          "scope": "actual state transitions; not calibrated RT60 or audible-device qualification"
+        },
+        "watchdog": {
+          "connections": 2,
+          "producerFramesBefore": 1841152,
+          "producerFramesAfter": 2066432,
+          "scope": "only delivery of genuine first-connection state snapshots withheld; backend kept advancing"
+        }
+      }
+    },
+    "analysis_partial": {
+      "status": "FAIL",
+      "source": "/workspace/.prophet-cloud/task-a/e2e-native-analysis/e2e-native.json",
+      "sha256": "3f195199aeb76a2aad6b831b9fbe9c2e4f1e9386ece16b1420e9d38c20c8cf5b",
+      "cases": [
+        {
+          "case": "native_spectrum",
+          "status": "FAIL",
+          "error": "Locator expected to be visible\nActual value: None\nError: element(s) not found \nCall log:\n  - Expect \"to_be_visible\" get_by_test_id(\"spectrum-measurement\") with timeout 10000ms\n  - waiting for get_by_test_id(\"spectrum-measurement\")\n\nAria snapshot:\n- main:\n  - text: TWELVE VOICE \u00b7 VIRTUAL ANALOG\n  - heading \"PROPHET\u2014XII\" [level=1]\n  - text: \u25cf RUST EN"
+        },
+        {
+          "case": "native_transfer",
+          "status": "PASS",
+          "error": ""
+        },
+        {
+          "case": "native_watchdog",
+          "status": "PASS",
+          "error": ""
+        }
+      ],
+      "observations": {
+        "transfer": {
+          "audioSampleRate": 48000,
+          "measurementSampleRate": 48000,
+          "maxConcurrent": 1,
+          "requestsDuringTenEdits": 2,
+          "cutoffs": [
+            680,
+            1900
+          ],
+          "visiblePhasePoints": 255,
+          "maskedPhasePoints": 1,
+          "pixelTolerance": 0.002,
+          "scope": "actual legacy DTFT response; latest-request coalescing and display unwrap/mask, not replacement of backend measurement algorithm"
+        },
+        "watchdog": {
+          "connections": 2,
+          "producerFramesBefore": 25016320,
+          "producerFramesAfter": 25217024,
+          "scope": "only delivery of genuine first-connection state snapshots withheld; backend kept advancing"
+        }
+      }
+    },
+    "spectrum_replay_last_completed": {
+      "status": "FAIL",
+      "source": "/workspace/.prophet-cloud/task-a/e2e-native-spectrum-replay/e2e-native.json",
+      "sha256": "6213b83f30292536b9967adde89ee8ba1a346bf0eb505ec9e11941e1c97e2172",
+      "cases": [
+        {
+          "case": "native_spectrum",
+          "status": "FAIL",
+          "error": "Worker.evaluate: InvalidAccessError: Failed to execute 'close' on 'WebSocket': The close code must be either 1000, or between 3000 and 4999. 1001 is neither.\n    at eval (eval at evaluate (:370:30), <anonymous>:1:34)\n    at eval (<anonymous>)\n    at UtilityScript.evaluate (<anonymous>:370:30)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+        }
+      ],
+      "observations": {}
+    }
+  },
+  "not_completed": [
+    "full final 16-case native suite",
+    "full spectrum loss/reconnect PASS after last test-only close-code correction",
+    "native 96k selected browser cases",
+    "new integrated browser performance run",
+    "Vite HTTP/WebSocket proxy functional probe"
+  ]
+}

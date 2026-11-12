@@ -1,0 +1,4 @@
+method,n,p50_ns,p95_ns,p99_ns,max_ns,retained_buffer_bytes,warmup,iterations
+pffft_copy_ordered_r2c,2048,1732,1752,3075,115134,24576,100,2000
+pffft_copy_ordered_r2c,4096,3906,3946,8523,158098,49152,100,2000
+pffft_copy_ordered_r2c,8192,9344,9434,37557,247393,98304,100,2000

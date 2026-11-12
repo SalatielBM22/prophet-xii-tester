@@ -1,0 +1,30 @@
+[package]
+name = "prophet-analysis"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Device-independent, non-real-time R2C spectrum/STFT and transfer analysis"
+
+# Independently reviewable/buildable until Agent B integrates the analysis worker.
+[workspace]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+web = ["dep:wasm-bindgen"]
+
+[dependencies]
+realfft = "=3.5.0"
+rustfft = "=6.4.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "=0.2.130", optional = true }
+
+[[bench]]
+name = "fft"
+harness = false
+
+[profile.release]
+opt-level = 3
