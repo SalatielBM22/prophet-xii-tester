@@ -1,8 +1,9 @@
 import type { Command, Metadata } from './types';
-type Item = { epoch: number; command: Command; commandId: number; resolve: (submitted: boolean) => void; reject: (error: Error) => void };
+export interface Submission { submitted: boolean; acceptedCommandId: number | null }
+type Item = { epoch: number; command: Command; commandId: number; resolve: (submission: Submission) => void; reject: (error: Error) => void };
 /** Bounded, ordered HTTP control lane. Pointer updates coalesce before submission. */
 export class ControlTransport {
-  readonly clientId = globalThis.crypto?.randomUUID?.() ?? `ui-${Date.now()}-${Math.random()}`;
+  private ownHostCommands = new Set<number>();
   private sequence = 0;
   private parameters = new Map<number, Item>();
   private queue: Item[] = [];
@@ -15,16 +16,17 @@ export class ControlTransport {
   constructor(private token: string, private request: typeof fetch = (...args) => fetch(...args)) {}
   get generation() { return this.epoch; }
   get auth() { return this.token ? `?token=${encodeURIComponent(this.token)}` : ''; }
-  get supportsAck() { return this.metadata.protocolVersion === 2 && this.metadata.capabilities.includes('parameterAck'); }
+  get supportsAck() { return this.metadata.capabilities.includes('parameterAck'); }
+  isOwnHostCommand(id: number) { return this.ownHostCommands.has(id); }
   nextId() { return ++this.sequence; }
-  send(command: Command, commandId = this.nextId()): Promise<boolean> {
+  send(command: Command, commandId = this.nextId()): Promise<Submission> {
     if (this.disposed) return Promise.reject(Error('Control connection closed'));
-    if (command.type === 'midi_learn' && !this.metadata.capabilities.includes('midiLearnLifecycle')) return Promise.reject(Error('MIDI Learn lifecycle unsupported by host'));
+    if (['cancel_learn', 'unlearn', 'remap'].includes(command.type) && !this.metadata.capabilities.includes('midiLearnLifecycle')) return Promise.reject(Error('MIDI Learn lifecycle unsupported by host'));
     if (command.type === 'reverb_bypass' && !this.metadata.capabilities.includes('reverbBypass')) return Promise.reject(Error('Reverb bypass unsupported by host'));
     return new Promise((resolve, reject) => {
       const item = { epoch: this.epoch, command, commandId, resolve, reject };
       if (command.type === 'param') {
-        this.parameters.get(command.id)?.resolve(false);
+        this.parameters.get(command.id)?.resolve({ submitted: false, acceptedCommandId: null });
         this.parameters.set(command.id, item);
         if (!this.timer) this.timer = setTimeout(() => { this.timer = undefined; this.flushParameters(); void this.drain(); }, 16);
       } else {
@@ -43,7 +45,7 @@ export class ControlTransport {
       let barrier = -1;
       for (let i = this.queue.length - 1; i >= 0; i--) if (this.queue[i].command.type !== 'param') { barrier = i; break; }
       const index = this.queue.findIndex((x, i) => i > barrier && x.command.type === 'param' && item.command.type === 'param' && x.command.id === item.command.id);
-      if (index >= 0) this.queue.splice(index, 1)[0].resolve(false);
+      if (index >= 0) this.queue.splice(index, 1)[0].resolve({ submitted: false, acceptedCommandId: null });
       if (this.queue.length < 128) this.queue.push(item);
       else item.reject(Error('Control queue full'));
     }
@@ -58,11 +60,24 @@ export class ControlTransport {
         this.active = new AbortController();
         const timeout = setTimeout(() => this.active?.abort(), 5000);
         try {
-          const body = this.supportsAck ? { ...item.command, clientId: this.clientId, commandId: item.commandId } : item.command;
+          const body = item.command;
           const response = await this.request('/api/v1/command' + this.auth, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: this.active.signal });
           if (!response.ok) throw Error(`Control returned ${response.status}`);
           if (item.epoch !== this.epoch) throw Error('Stale control session');
-          item.resolve(true);
+          const text = await response.text();
+          let acceptedCommandId: number | null = null;
+          if (text.trim()) {
+            const payload = JSON.parse(text) as { acceptedCommandId?: unknown };
+            if (typeof payload.acceptedCommandId !== 'number' || !Number.isSafeInteger(payload.acceptedCommandId) || payload.acceptedCommandId <= 0) throw Error('Invalid command acceptance reply');
+            acceptedCommandId = payload.acceptedCommandId;
+          }
+          if (this.supportsAck && acceptedCommandId === null) throw Error('Native host omitted acceptedCommandId');
+          if (item.epoch !== this.epoch) throw Error('Stale control session');
+          if (acceptedCommandId !== null) {
+            this.ownHostCommands.add(acceptedCommandId);
+            if (this.ownHostCommands.size > 512) this.ownHostCommands.delete(this.ownHostCommands.values().next().value!);
+          }
+          item.resolve({ submitted: true, acceptedCommandId });
         } catch (error) { item.reject(error instanceof Error ? error : Error(String(error))); }
         finally { clearTimeout(timeout); this.active = null; }
       }
@@ -70,6 +85,7 @@ export class ControlTransport {
   }
   reset() {
     this.epoch++;
+    this.ownHostCommands.clear();
     clearTimeout(this.timer);
     this.timer = undefined;
     this.active?.abort();
