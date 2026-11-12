@@ -1,4 +1,4 @@
-use crate::{Config, Error, SpectrumAnalyzer, SpectrumView};
+use crate::{Config, Error, SpectrumAnalyzer, SpectrumView, WindowMetrics};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameMetadata {
@@ -24,6 +24,9 @@ pub struct Stft {
     discontinuities: u64,
 }
 impl Stft {
+    pub fn window_metrics(&self) -> WindowMetrics {
+        self.analyzer.window_metrics()
+    }
     pub fn memory_bytes(&self) -> usize {
         self.analyzer.memory_bytes()
             + (self.ring.len() + self.frame.len()) * std::mem::size_of::<f32>()

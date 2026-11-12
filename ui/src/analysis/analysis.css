@@ -1,0 +1,10 @@
+.analysis { margin: 18px 0; padding: 14px; border: 1px solid #46503d; background: #101710; }
+.analysis h2 { font-size: 12px; letter-spacing: 1px; color: #dfbd79; }
+.analysis p, .analysis label { font: 11px/1.6 monospace; color: #b3beaa; overflow-wrap: anywhere; }
+.analysis canvas { display: block; width: 100%; max-width: 100%; height: auto; background: #0b1010; border: 1px solid #46503d; }
+.analysis .meters { margin-top: 0; }
+.analysis .meters > div { min-width: 0; }
+.analysis label { display: block; margin: 10px 0; }
+.analysis-config { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.analysis-config label { display: flex; flex-direction: column; gap: 5px; }
+.analysis-config input { width: 110px; }

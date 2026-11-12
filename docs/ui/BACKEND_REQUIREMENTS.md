@@ -1,52 +1,111 @@
-# UI/backend contract — proposal 2.0.0
+# Native UI integration contract — additive v1
 
-Status: Agent A consumer proposal, pending implementation and agreement by Agent B.
-Baseline: `b47f2d60c7005cd6c81694c0e17c76f7a4f107dc`, issues [#1](https://github.com/AdhonisBR/prophet-xii/issues/1), [#2](https://github.com/AdhonisBR/prophet-xii/issues/2), [#3](https://github.com/AdhonisBR/prophet-xii/issues/3), [#4](https://github.com/AdhonisBR/prophet-xii/issues/4), including the three technical comments on #1. No producer or endpoint changes are included in Agent A's work.
+The authoritative producer contract is Agent B's [INTEGRATION_CONTRACT.md](https://github.com/SalatielBM22/prophet-xii-tester/blob/211c4f44dc735a89047dad32e725e39b9b8c9b68/docs/backend/INTEGRATION_CONTRACT.md).
+Its [RT_OPTIMIZATION.md](https://github.com/SalatielBM22/prophet-xii-tester/blob/211c4f44dc735a89047dad32e725e39b9b8c9b68/docs/backend/RT_OPTIMIZATION.md) was read in full alongside actual source before integration.
 
-## Negotiation and compatibility
+This replaces the earlier Agent A v2 proposal. The implemented native wire protocol
+remains `v:1`, IDs 0–82, with additive fields and `meta.extensions`. No v2
+client/session fields, synthetic endpoints, per-channel MIDI mappings or guessed
+envelope stages are sent. Capability names inside React are adapter details.
 
-Keep existing `/api/v1/meta`, `/api/v1/state`, `/api/v1/ws`, `/api/v1/command` and `/api/v1/filter` routes. Do not infer features from a version alone. Metadata may advertise `protocolVersion: 2` and an explicit string array `capabilities`: `parameterAck`, `factoryPresetValues`, `midiLearnLifecycle`, `voiceEnvelopes`, `reverbBypass`, `continuousSpectrum`, `filterResponseV2`. Absent capabilities mean unsupported. Commands and responses below are proposals on those negotiated routes, not claims that v1 implements them.
+## Acceptance versus application
 
-Keep parameter IDs 0–82 unchanged and append new IDs; preserve serialized preset version 1. Validate finite numbers, bounds and enum domains at both ends. Unknown optional fields must not break v1. Unknown required major versions must produce an unsupported state rather than simulated telemetry. Session changes invalidate revisions, pending acknowledgments and frame ordering. Authentication continues using the existing token mechanisms; never log tokens.
+`POST /api/v1/command` returns HTTP 202 and `acceptedCommandId` for enqueue.
+Only `parameterCommandIds[id] === acceptedCommandId` confirms application of a
+direct parameter command. Snapshot/preset confirmation checks all 83 IDs. The
+global `control.lastAppliedCommandId` is not a watermark for another client.
 
-## Parameter changes, presets and ordering
+The store retains optimistic intent through stale telemetry and through a delayed
+202 response, then reconciles the latest authoritative frame after the host ID
+is known. It rejects regressed sequence/revision/frame/monotonic counters until
+reconnect. Explicit dropped IDs, competing newer per-parameter stamps, send
+errors and a four-second timeout produce visible errors/resynchronization rather
+than false confirmation. Drag values coalesce in a bounded ordered HTTP lane.
+Preset/panic commands are barriers. Reconnect invalidates in-flight generations
+and factory references; two advancing snapshots establish connected state.
+A three-second frame-progress watchdog rejects a stagnant ready:true snapshot.
+This is a UI liveness check, not audio-device recovery or a latency measurement.
 
-V2 command envelopes add a random client session `clientId` and monotonically increasing integer `commandId`. For `parameterAck`, telemetry adds `parameterRevision`, `appliedCommandId`, `sequence` and `sampleTimestamp`; acknowledgment identifies this client. `parameterRevision` increases only when authoritative parameter state changes. Acknowledgments must mean the audio/control state has applied a command, not merely that HTTP accepted it. Rejected/expired commands need explicit errors. Preserve order per client; bounded coalescing can discard superseded parameter values but must preserve final gesture value and causal snapshot/preset/panic order.
+The original backend without extensions retains a labelled matching-value echo
+heuristic; it has no causal ACK. No missing feature is inferred from version 1.
 
-Metadata capability `factoryPresetValues` supplies an immutable `values` array for each factory preset. A preset request must telemetrize `presetId` and `factoryPresetRevision` matching the metadata preset's `referenceRevision` before reset becomes enabled. Do not use a generic minimum or editable current snapshot as a factory default. A v1 host does not expose an authoritative factory reference; reset is unavailable unless a reference can be established without ambiguity. Imports and user snapshots do not become factory defaults.
+## Factory reference and controls
 
-The v1 adapter uses matching-value echoes as a bounded reconciliation heuristic; it cannot prove causal acknowledgment or distinguish coincidental values from external automation. UI must expose this limit, keep active gestures protected against stale snapshots, and report timeout/send errors instead of pinning values forever. Strong delayed/reordered-command guarantees require v2. Snapshot payloads must be validated in full before updating state.
+Metadata presets contain the loader's original 83 values. The UI remembers the
+selected preset's immutable values only after observing all 83 applied IDs equal
+to that preset request. Double-click, Alt+Enter and the explicit reset button use
+that reference. Ordinary edits do not replace it; imports/slots/external factory
+snapshots invalidate it where observable. No fabricated presetId/referenceRevision
+fields are required. The backend has no selected-preset identity field, so a
+freshly connected client must select/confirm a factory preset before reset.
 
-## MIDI Learn
+Numeric editors validate finite/range/integer/enum domains. Pointer and keyboard
+gestures produce one history entry; numeric edits/reset also support Undo/Redo.
+Chorus I/II and Mode share one local atomic value. PW, Ensemble, Vowel/Shimmer,
+modulation and BPM/Beats controls explain their actual conditions.
 
-Capability `midiLearnLifecycle`: proposed command `type: "midi_learn"`, `action: "start" | "cancel" | "remove" | "replace" | "query"`, `parameterId` and, for replacement, explicit `channel` (0–15) and `cc` (0–127). Clarify global/channel mapping policy; conflict replacement must be atomic and reported. Telemetry `midiLearn` contains `state: "idle" | "pending" | "assigned"`, nullable `parameterId`, and `bindings: [{parameterId, channel, cc}]`. Persist binding changes in host/plugin state and provide the authoritative table after reconnect. Removal targets a parameter explicitly; cancellation changes pending capture without deleting an existing binding. V1's `learn` command can only start capture; cancel/remove/query/replace and a confirmed assigned indicator remain unsupported there. Local dismissal must not claim to cancel backend capture.
+## MIDI Learn and bypass
 
-## Envelopes and clocks
+Existing `learn{id}` starts capture. Native commands are `cancel_learn`,
+`unlearn{id}`, `remap{cc,id}` and
+`reverb_bypass{enabled,tail:"spill"|"kill"}`. No query command is invented:
+`midiLearn:{active,target,ccMap[128]}` is authoritative state. Mappings are global
+across channels; CC64/120/123 are reserved and MPE-channel CC74 takes precedence.
+UI pending/assigned/idle comes from this state, not knob movement.
 
-Capability `voiceEnvelopes`: `envelopes: {amp: VoiceEnvelope[12], filter: VoiceEnvelope[12]}`. Each voice has `stage` (`Idle`, `Attack`, `Decay`, `Sustain`, `Release`), actual `level`, `elapsedSamples`, optional finite `stageDurationSamples`, and `noteGeneration`, a generation counter for retrigger/steal. Frames carry `sequence`, `sampleTimestamp` (absolute rendered sample index) and actual `sampleRate`. Stage/time comes from the producer; amplitude alone is insufficient. On sample-rate or generation change the consumer must rebase rather than extrapolate old progress. Idle/Sustain may have indeterminate duration. Dropped frames are visible via sequence discontinuity; retain bounded latest-frame state and never queue unbounded animation work.
+Reverb status is exactly `{enabled,tail,dormant,enableGain}`; the UI displays these
+fields, independent wet/dry, and spill/kill selection. It does not rename dormant
+as silence, infer an invented tail state, alias Decay to Size or claim calibrated
+RT60. B owns the fade/tank behavior. Durable MIDI-map storage, full JNI parity and
+audible-device qualification remain open in B's report.
 
-Programmed ADSR is a separate nominal model, using the current kernel's attack target 1.2, exponent ln(6), decay/release exponent 4.8, undershoot epsilon 0.0015 and release threshold 0.0001. Durations follow threshold crossings, not arbitrary fixed widths; the time axis uses seconds and the configured sample rate. Per-voice RC dispersion, retrigger level and instantaneous edits require actual voice telemetry. This describes the current virtual analog kernel; it does not establish electrical fidelity to a CEM3310.
+## Envelopes
 
-## Reverb
+`ampEnvelopes[12]` and `filterEnvelopes[12]` contain numeric stage 0–4, level,
+elapsedSamples, progress and timed. React names the actual stages and uses the
+provided progress; Idle/Sustain remain indefinite. Seconds are elapsed/base
+sample rate. Voice activity follows activeVoiceMask because an inactive filter
+envelope can retain its previous stage. No generation or stage is inferred from
+amplitude. Programmed ADSR remains a separate nominal visualization of the actual
+RC law/thresholds, tested against the unchanged baseline f32 kernel at 48/96 kHz.
+This is not a physical CEM3310 calibration claim.
 
-Capability `reverbBypass`: proposed command `type: "reverb_bypass"`, `enabled: boolean`, `tailPolicy: "spill" | "kill"`. Authoritative telemetry must expose `reverb: {enabled, tailPolicy, transition: "stable" | "crossfading", tailStatus: "active" | "decaying" | "cleared" | "frozen"}`. Agent B owns a bounded, click-free transition and defines state advancement under dry/wet and freeze. V1 `ReverbWet=0` is dry mix, **not** independent bypass. The UI must show bypass and tail feedback as unavailable on v1. Do not relabel Decay as Size; any future room-size parameter requires a new stable ID and measurable implementation.
+## Continuous capture and Rust analysis
 
-Existing dependencies: Ensemble Blend requires Ensemble mp/forte; Vowel Morph requires Vowel Mix and is ineffective in freeze feedback; shimmer pitch/fifth requires Shimmer; modulation Speed requires Depth; unsynced Pre Delay is milliseconds, BPM/Beats are applicable only with Sync. UI disabled states explain each condition. These mappings do not prove audible sensitivity; Agent B must supply 48/96 kHz impulse/note sensitivity, tail/freeze and output stability evidence. No claim of proprietary Solaris/Cloudburst equivalence.
+Only the advertised `continuous-capture` extension opens the existing authenticated
+`/api/v1/capture` WebSocket. The Worker validates the real payload:
+`{v:1,blocks:[{sequence,firstFrame,sampleRate,samples}]}`, max 64 samples/chunk
+and a bounded message. Samples are actual post-FX/master mono-left output.
 
-## Continuous spectrum and transfer response
+The same device-independent Rust STFT is compiled to WASM in a dedicated Worker.
+Plans, input/output/scratch and the 64-sample bridge buffer are reused. Packet
+sequence and absolute frame positions detect gaps; Rust resets overlap, averages
+and peak history and waits for N fresh contiguous samples. Reconnect, invalid
+payloads, sample-rate/window/N changes also clear history. No zero filling or
+scope-snapshot concatenation disguises loss. Old/overlapping packets are rejected.
+Drawing is capped at 30 Hz; scope snapshots and state remain separate.
 
-Capability `continuousSpectrum`: transport either continuous sample chunks or precomputed spectrum frames **off the audio callback**. Samples need monotonically increasing `sequence`, absolute `firstSample`, `sampleRate`, `channel`, bounded data length, reset/session ID and explicit discontinuity/overrun count. STFT consumer resets history after a gap or rate change. V1 1024-sample scope snapshots have unknown gaps and cannot serve as a continuous STFT stream.
+The UI configures N=2048/4096/8192, Hann/BH/Kaiser, linear-power averaging and peak
+hold/decay. It shows actual rate/bin spacing/window gain/ENBW and sample indices,
+with a positive logarithmic Hz axis and single-sided amplitude dBFS. See
+[analysis/WASM.md](../analysis/WASM.md) for bridge/build/runtime checks.
 
-Spectrum frames need `sequence`, `firstSample`, `sampleRate`, `fftSize` (2048/4096/8192), `hopSize`, `window` (Hann/BH/Kaiser + beta), `coherentGain`, `enbwBins`, `normalization: "single-sided-amplitude-dbfs"`, `dbfs`, optional `peakDbfs` and averaging/peak configuration. DC/Nyquist are not doubled. Frequency is `k * sampleRate / fftSize`, with DC omitted from logarithmic plots. Average linear power before conversion to dB. The library API and numerical gates are documented under `docs/analysis/`.
+## Transfer response and remaining work
 
-Capability `filterResponseV2`: actual `sampleRate`, `sequence`/request generation, impulse length, FFT length, tail-convergence diagnostic, `hz`, `db`, unwrapped `phase` with undefined values represented as `null` below a declared magnitude floor. Interpolate complex FFT values; don't interpolate wrapped phase. Transfer magnitude is |H| in dB, not window-normalized audio dBFS. The current endpoint is a 4096-sample DTFT at fixed 48 kHz, regardless of live sample rate; legacy display must identify that rate explicitly. Latest request wins; abort obsolete fetches and drop late generations. Producer must coalesce bounded pending work; aborting browser fetch alone cannot stop already spawned backend computation. FFT zero padding refines interpolation, not physical resolving power. Agent B owns endpoint integration and impulse acquisition/tail convergence.
+The actual `/api/v1/filter` is still B's fixed-48-kHz, 4096-sample DTFT worker.
+The UI labels that rate explicitly even when audio runs at 96 kHz. It unwraps
+the supplied phase samples, breaks below -100 dB, uses log-frequency coordinates
+and keeps transfer magnitude dB separate from the live output dBFS spectrum.
+A capacity-one pending/latest queue permits only one request in flight per chart;
+obsolete responses are discarded without spawning a new HTTP measurement before
+the previous request finishes.
 
-## Producer acceptance checklist
+The independent Rust FFT impulse/complex interpolation/dense unwrap/cancellation
+implementation is tested and benchmarked, but the backend exposes neither an
+impulse-response transport nor that analyzer. Replacement of the DTFT endpoint,
+actual VCF tail-convergence integration and long-delay phase ambiguity on the
+legacy sparse grid remain OPEN for joint work; no endpoint speedup is claimed.
 
-- Real v1 regression compatibility, 12 simultaneous voices, 44.1/48/96 kHz, bounded payloads and queues.
-- Ack/revision/session tests with delayed, dropped and reordered transport; rejection and reconnect.
-- Full MIDI lifecycle including conflicting CC and persistence.
-- Envelope idle/attack/decay/sustain/release, retrigger/steal and sample-rate transitions; no guessed stages.
-- Bypass kill/spill/freeze, audible parameter sensitivity and numerical stability.
-- Continuous spectrum gap detection and independent-reference FFT/phase tests.
-- No FFT, allocation, JSON, network work or UI callbacks on the audio thread. DSP performance/latency and hardware measurements belong to Agent B; WSLg buffering must be separated from callback cost.
+Issues #1–#4 remain open where deadlines, RT60, physical fidelity, device/JNI/DAW
+or ARM64 runtime validation are missing. UI integration does not qualify those
+unmeasured properties.

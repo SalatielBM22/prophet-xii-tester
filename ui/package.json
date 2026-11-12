@@ -5,13 +5,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "npm run build:analysis && vite",
+    "build": "npm run build:analysis && tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:analysis": "node scripts/build-analysis.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

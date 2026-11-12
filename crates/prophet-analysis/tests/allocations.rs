@@ -32,6 +32,8 @@ fn no_allocations_after_planning_in_spectrum_stft_transfer() {
     let x = vec![0.25; 4096];
     let mut s = Stft::new(c, 1024).unwrap();
     let mut t = TransferAnalyzer::new(8192).unwrap();
+    #[cfg(feature = "web")]
+    let mut web = WebAnalyzer::new(4096, 48000.0, 0, 1.0, 25, 1.0, 8.6).unwrap();
     let impulse = vec![0.0; 4096];
     let mut points = vec![TransferPoint::default(); 256];
     let mut f = vec![0.0; 256];
@@ -49,6 +51,12 @@ fn no_allocations_after_planning_in_spectrum_stft_transfer() {
         .unwrap();
         t.analyze(&impulse, 48000.0, &f, -100.0, &mut points, None)
             .unwrap();
+    }
+    #[cfg(feature = "web")]
+    for sequence in 0..128 {
+        assert!(web.push(sequence as f64, (sequence * 64) as f64, 64) >= 0);
+        assert_eq!(web.push(-1.0, 0.0, 64), -2);
+        assert_eq!(web.push(0.0, 0.0, 65), -1);
     }
     ENABLED.store(false, Ordering::SeqCst);
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0);

@@ -1,0 +1,2 @@
+   Compiling prophet-analysis v1.0.0 (/workspace/prophet-xii/crates/prophet-analysis)
+    Finished `release` profile [optimized] target(s) in 3.93s

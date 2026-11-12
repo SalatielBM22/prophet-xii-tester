@@ -231,136 +231,10 @@ class Suite:
         await expect(page.get_by_role("slider", name="Filter Cutoff", exact=True)).to_be_enabled(timeout=8000)
         assert len(sockets)>=2, "No reconnection WebSocket was created"
 
-    async def v2_consumer_fixture(self, page):
-        """Consumer contract test only; does not establish backend v2 integration."""
-        self.api({"type":"preset","index":0})
-        await asyncio.sleep(.15)
-        frame=self.api()
-        factory=list(frame["values"])
-        frame.update(v=2,sessionId="test-only-v2",sequence=0,parameterRevision=0,sampleTimestamp=frame["frames"],presetId=0,factoryPresetRevision=1)
-        voices=[{"voice":i,"stage":"Idle","level":0,"elapsedSamples":0,"stageDurationSamples":None,"noteGeneration":0} for i in range(12)]
-        frame["envelopes"]={"amp":voices,"filter":voices}
-        frame["midiLearn"]={"state":"idle","parameterId":None,"bindings":[]}
-        frame["reverb"]={"enabled":True,"tailPolicy":"spill","transition":"stable","tailStatus":"cleared"}
-        with urllib.request.urlopen(self.base+"/api/v1/meta",timeout=5) as response:
-            metadata=json.load(response)
-        metadata.update(protocolVersion=2,sessionId="test-only-v2",capabilities=["parameterAck","factoryPresetValues","midiLearnLifecycle","voiceEnvelopes","reverbBypass"])
-        for preset in metadata["presets"]:
-            if preset["id"]==0:preset.update(values=factory,referenceRevision=1)
-        sockets=[]
-        commands=[]
-        def emit():
-            frame["sequence"]+=1
-            frame["parameterRevision"]+=1
-            for socket in sockets:socket.send(json.dumps(frame))
-        def wire(route):
-            sockets.append(route)
-            emit()
-        async def meta_route(route):
-            await route.fulfill(status=200,json=metadata)
-        async def command_route(route):
-            command=route.request.post_data_json
-            commands.append(command)
-            if command["type"]=="param":frame["values"][command["id"]]=command["value"]
-            elif command["type"]=="preset":frame["values"]=list(factory)
-            elif command["type"]=="midi_learn":
-                action=command["action"]
-                learn=frame["midiLearn"]
-                if action=="start":learn.update(state="pending",parameterId=command["parameterId"])
-                elif action=="cancel":learn.update(state="idle",parameterId=None)
-                elif action=="replace":learn.update(state="assigned",parameterId=command["parameterId"],bindings=[{"parameterId":command["parameterId"],"channel":command.get("channel",0),"cc":command.get("cc",16)}])
-                elif action=="remove":learn.update(state="idle",parameterId=None,bindings=[])
-            elif command["type"]=="reverb_bypass":frame["reverb"].update(enabled=command["enabled"],tailPolicy=command["tailPolicy"])
-            frame["clientId"]=command.get("clientId")
-            frame["appliedCommandId"]=command.get("commandId")
-            await route.fulfill(status=202)
-            await asyncio.sleep(.02)
-            emit()
-        await page.route("**/api/v1/meta*",meta_route)
-        await page.route("**/api/v1/command*",command_route)
-        await page.route_web_socket("**/api/v1/ws*",wire)
-        await page.goto(self.base)
-        await page.get_by_text("RUST ENGINE CONNECTED",exact=False).wait_for()
-        await page.get_by_role("combobox",name="Factory preset",exact=True).select_option("0")
-        await page.wait_for_timeout(100)
-        slider=page.get_by_role("slider",name="Filter Cutoff",exact=True)
-        await self.edit(page,"Filter Cutoff",1234)
-        await page.wait_for_timeout(100)
-        await slider.dblclick()
-        await expect(slider).to_have_attribute("aria-valuenow",str(int(factory[23])))
-        await page.get_by_role("button",name="UNDO",exact=True).click()
-        await expect(slider).to_have_attribute("aria-valuenow","1234")
-        await page.get_by_role("button",name="REDO",exact=True).click()
-        await expect(slider).to_have_attribute("aria-valuenow",str(int(factory[23])))
-        # Keyboard opens the numeric editor; Alt+Enter restores the confirmed
-        # factory value, and a dedicated reset button supports touch activation.
-        readout=page.get_by_role("button",name="Edit Filter Cutoff",exact=True)
-        await readout.focus()
-        await readout.press("Enter")
-        field=page.get_by_role("textbox",name="Filter Cutoff value",exact=True)
-        await field.fill("1390")
-        await field.press("Enter")
-        await slider.focus()
-        await slider.press("Alt+Enter")
-        await expect(slider).to_have_attribute("aria-valuenow",str(int(factory[23])))
-        await readout.tap()
-        field=page.get_by_role("textbox",name="Filter Cutoff value",exact=True)
-        await field.fill("1450")
-        await field.press("Enter")
-        await page.get_by_role("button",name="Reset Filter Cutoff to factory preset",exact=True).tap()
-        await expect(slider).to_have_attribute("aria-valuenow",str(int(factory[23])))
-        await slider.click(button="right")
-        dialog=page.get_by_role("dialog",name="MIDI Learn",exact=True)
-        await expect(dialog.get_by_role("button",name="Start MIDI Learn",exact=True)).to_be_enabled()
-        await dialog.get_by_role("button",name="Start MIDI Learn",exact=True).click()
-        await page.wait_for_timeout(100)
-        assert frame["midiLearn"]["state"]=="pending"
-        await expect(dialog.get_by_role("button",name="Cancel MIDI Learn",exact=True)).to_be_enabled()
-        await dialog.get_by_role("button",name="Cancel MIDI Learn",exact=True).click()
-        await page.wait_for_timeout(100)
-        assert frame["midiLearn"]["state"]=="idle"
-        await expect(dialog.get_by_role("button",name="Replace MIDI mapping",exact=True)).to_be_enabled()
-        await dialog.get_by_role("button",name="Replace MIDI mapping",exact=True).click()
-        await page.wait_for_timeout(100)
-        assert frame["midiLearn"]["state"]=="assigned"
-        await dialog.get_by_role("button",name="Query MIDI mappings",exact=True).click()
-        await page.wait_for_timeout(100)
-        await expect(dialog).to_contain_text("Channel 0, CC 1")
-        await expect(dialog.get_by_role("button",name="Remove MIDI mapping",exact=True)).to_be_enabled()
-        await dialog.get_by_role("button",name="Remove MIDI mapping",exact=True).click()
-        await page.wait_for_timeout(100)
-        assert frame["midiLearn"]["bindings"]==[]
-        actions=[c["action"] for c in commands if c["type"]=="midi_learn"]
-        assert all(action in actions for action in ["start","cancel","replace","query","remove"]),actions
-        assert all("clientId" in c and "commandId" in c for c in commands),"V2 commands omitted acknowledgment identity"
-        await dialog.get_by_role("button",name="Dismiss MIDI Learn panel",exact=True).click()
-        # The consumer shows explicit producer-supplied stages, sample time and
-        # generation changes; these are fixtures, not inferred from level.
-        for i,voice in enumerate(voices):
-            voice.update(stage=["Attack","Decay","Sustain","Release"][i%4],level=.5,elapsedSamples=24000,stageDurationSamples=48000,noteGeneration=1)
-        frame["sampleRate"]=48000
-        emit()
-        running=page.get_by_role("list",name="Running amp envelopes",exact=True)
-        await expect(running.get_by_role("listitem")).to_have_count(12)
-        await expect(running.get_by_role("listitem").first).to_contain_text("Attack")
-        await expect(running.get_by_role("listitem").first).to_contain_text("0.500 s")
-        frame["sampleRate"]=96000
-        emit()
-        await expect(running.get_by_role("listitem").first).to_contain_text("0.250 s")
-        voices[0].update(stage="Release",elapsedSamples=0,noteGeneration=2)
-        emit()
-        await expect(running.get_by_role("listitem").first).to_contain_text("Release")
-        await expect(running.get_by_role("listitem").first).to_contain_text("0.000 s")
-        stale=json.loads(json.dumps(frame))
-        stale["sequence"]-=1
-        stale["values"][23]=1111
-        sockets[-1].send(json.dumps(stale))
-        await page.wait_for_timeout(100)
-        await expect(slider).to_have_attribute("aria-valuenow",str(int(factory[23])))
 
     async def run(self, chromium, selected=None):
         self.output.mkdir(parents=True, exist_ok=True)
-        cases = [self.numeric,self.drag_undo,self.touch_keyboard,self.delayed_controls,self.dependencies,self.envelopes,self.unavailable_v1,self.reconnect,self.v2_consumer_fixture]
+        cases = [self.numeric,self.drag_undo,self.touch_keyboard,self.delayed_controls,self.dependencies,self.envelopes,self.unavailable_v1,self.reconnect]
         if selected:
             unknown=set(selected)-{case.__name__ for case in cases}
             if unknown:raise ValueError("Unknown cases: "+", ".join(sorted(unknown)))
@@ -386,7 +260,7 @@ class Suite:
                 self.api({"type":"panic"})
                 print(json.dumps(result),flush=True)
             await browser.close()
-        report={"backend":"actual Rust protocol v1; explicit test-only fault injection in delayed_controls/reconnect; v2_consumer_fixture is a simulated consumer contract test, not backend integration","base":self.base,"results":self.results,"status":"FAIL" if any(x["status"]=="FAIL" for x in self.results) else "PASS"}
+        report={"backend":"actual Rust protocol v1; explicit test-only fault injection in delayed_controls/reconnect","base":self.base,"results":self.results,"status":"FAIL" if any(x["status"]=="FAIL" for x in self.results) else "PASS"}
         (self.output/"e2e-controls.json").write_text(json.dumps(report,indent=2)+"\n")
         files=sorted(p for p in self.output.iterdir() if p.is_file() and p.name!="SHA256SUMS")
         (self.output/"SHA256SUMS").write_text("".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in files))

@@ -5,14 +5,13 @@ import { Knob } from './controls/Knob';
 import { ParameterState } from './controls/parameterState';
 import { inactiveReason, paramId } from './controls/parameters';
 import { Envelope } from './components/Envelope';
-import { Scope } from './components/LegacyMeters';
+import { AnalysisPanel } from './analysis/AnalysisPanel';
 import { ControlTransport } from './protocol/transport';
 import { decodeFrame, decodeMetadata, withFrameCapabilities } from './protocol/types';
 import type { Command, Frame, Metadata } from './protocol/types';
 import './style.css';
 
 const emptyMetadata: Metadata = { protocolVersion: 1, capabilities: [], presets: [] };
-type Filter = { hz: number[]; db: number[]; phase: number[] };
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('prophet-token') || '');
   const transport = useMemo(() => new ControlTransport(token), [token]);
@@ -34,7 +33,6 @@ export default function App() {
   const midiGeneration = useRef(0);
   const clearMIDI = useCallback(() => { midiGeneration.current++; midiInputs.current.forEach(input => { input.onmidimessage = null; }); midiInputs.current = []; }, []);
   useEffect(() => clearMIDI, [token, clearMIDI]);
-  const [filter, setFilter] = useState<Filter | null>(null);
   const capability = (name: Metadata['capabilities'][number]) => metadata.capabilities.includes(name);
   const send = useCallback(async (command: Command) => {
     const generation = transport.generation;
@@ -131,19 +129,6 @@ export default function App() {
   }, [send]);
   const panic = useCallback(() => { heldRef.current.clear(); setHeld(new Set()); void send({ type: 'panic' }); }, [send]);
   useEffect(() => { window.addEventListener('blur', panic); return () => window.removeEventListener('blur', panic); }, [panic]);
-  const signature = ['FilterCutoff', 'FilterResonance', 'FilterDrive', 'FilterMorph', 'MoogBassComp'].map(key => values[paramId(key)]).join(',');
-  useEffect(() => {
-    if (!connected) { setFilter(null); return; }
-    let alive = true;
-    const abort = new AbortController();
-    const timer = setTimeout(() => {
-      fetch('/api/v1/filter' + transport.auth, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parameters.getSnapshot().values), signal: abort.signal })
-        .then(r => { if (!r.ok) throw Error('Filter response unavailable'); return r.json(); })
-        .then((data: Filter) => { if (alive && Array.isArray(data.hz) && data.hz.length === data.db?.length && data.db.length === data.phase?.length && [...data.hz, ...data.db, ...data.phase].every(Number.isFinite)) setFilter(data); })
-        .catch(() => { if (alive) setFilter(null); });
-    }, 180);
-    return () => { alive = false; clearTimeout(timer); abort.abort(); };
-  }, [signature, connected, token, transport, parameters]);
   const loadPreset = async (value: string) => {
     setSelectedPreset(value); setFactoryReference(null); presetRequest.current = null;
     parameters.end(); setPresetLoading(true);
@@ -184,7 +169,7 @@ export default function App() {
     <section className="diagnostics"><div><small>VOICE CARDS</small><div className="leds">{Array.from({ length: 12 }, (_, i) => <div key={i} title={`Voice ${i + 1} · MIDI ${frame?.voiceMidiNotes[i] ?? '—'}`}><i className={frame && (frame.activeVoiceMask & (1 << i)) ? 'active' : ''} /><span>{String(i + 1).padStart(2, '0')}</span></div>)}</div></div><button onClick={() => setDrawer(!drawer)}>VOICE TRIMPOTS {drawer ? '−' : '+'}</button><p>Right-click a control for MIDI Learn. {midiState ? `Host learn state: ${midiState.active ? 'pending' : 'idle'}` : 'MIDI mappings and capture completion unavailable on this legacy host.'}</p></section>
     {midiTarget !== null && <section className="midi-dialog" role="dialog" aria-label="MIDI Learn"><h2>MIDI Learn · {specs[midiTarget].name}</h2><p>{midiState ? `State: ${selectedLearnState}${midiState.target !== null ? ` · target ${specs[midiState.target].name}` : ''}` : 'This host supports starting capture only. Dismiss does not cancel capture.'}</p><button disabled={!connected || presetLoading} onClick={() => void midiAction('start')}>Start MIDI Learn</button><button disabled={!connected || !capability('midiLearnLifecycle')} onClick={() => void midiAction('cancel')}>Cancel MIDI Learn</button><button disabled={!connected || !capability('midiLearnLifecycle')} onClick={() => void midiAction('remove')}>Remove MIDI mapping</button><p>Mappings are global across channels. CC64/120/123 are reserved; MPE channel CC74 takes precedence.</p><label>CC<input aria-label="MIDI mapping CC" disabled={!capability('midiLearnLifecycle')} type="number" min="0" max="127" value={midiCC} onChange={e => setMidiCC(Number(e.target.value))} /></label><button disabled={!connected || !capability('midiLearnLifecycle')} onClick={() => void midiAction('replace')}>Replace MIDI mapping</button><p>{midiState ? midiState.ccMap.flatMap((id, cc) => id === midiTarget ? [`CC ${cc}`] : []).join(' · ') || 'No assigned mapping' : 'Cancel, remove, replace and mapping feedback: not supported by this legacy host.'}</p><button onClick={() => setMidiTarget(null)}>Dismiss MIDI Learn panel</button></section>}
     {drawer && <section className="calibration">{frame?.trimpots.map((t, i) => <fieldset key={i}><legend>VOICE {i + 1}</legend>{['A cents', 'B cents', 'Cutoff %', 'Envelope %'].map((label, j) => <label key={j}>{label}<input aria-label={`Voice ${i + 1} ${label}`} disabled={!connected || presetLoading} type="number" step="0.1" value={Number((t[j] * (j >= 2 ? 100 : 1)).toFixed(2))} onChange={e => { const value = Number(e.target.value) / (j >= 2 ? 100 : 1); if (Number.isFinite(value)) void send({ type: 'trimpot', voice: i, field: j, value }); }} /></label>)}</fieldset>)}</section>}
-    <section className="meters"><Scope frame={frame} /><div className="filterchart"><small>MEASURED RUST VCF · SMALL SIGNAL · FIXED 48 kHz (legacy endpoint)</small><svg viewBox="0 0 500 150"><path d={filter ? 'M' + filter.db.map((db, i) => `${i * 500 / filter.db.length},${Math.max(5, Math.min(145, 45 - db))}`).join(' L') : ''} fill="none" stroke="#e9b95e" strokeWidth="2" /><path d={filter ? 'M' + filter.phase.map((phase, i) => `${i * 500 / filter.phase.length},${80 - phase * 15}`).join(' L') : ''} fill="none" stroke="#80cdae" strokeWidth="1" /></svg><span>20 Hz — 20 kHz · amber magnitude · green phase</span></div></section>
+    <AnalysisPanel frame={frame} values={values} connected={connected} token={token} metadata={metadata} />
     <div className="panels">{groups.map(group => <section className={'panel ' + (group === 'REVERB' ? 'wide' : '')} key={group}><h2>{group}</h2>
       {group === 'CHORUS' && <div className="chorus-buttons">{[1, 2].map((bit, i) => <button disabled={!connected || presetLoading} key={bit} className={(Math.round(values[paramId('ChorusMode')]) & bit) ? 'selected' : ''} aria-pressed={Boolean(Math.round(values[paramId('ChorusMode')]) & bit)} onClick={() => parameters.edit(paramId('ChorusMode'), Math.round(parameters.getSnapshot().values[paramId('ChorusMode')]) ^ bit)}>CHORUS {i === 0 ? 'I' : 'II'}</button>)}</div>}
       {group === 'REVERB' && <div className="reverb-status"><button disabled={!connected || !capability('reverbBypass') || !frame?.reverb} onClick={() => frame?.reverb && void send({ type: 'reverb_bypass', enabled: !frame.reverb.enabled, tail: frame.reverb.tail })}>{capability('reverbBypass') && frame?.reverb ? `Reverb ${frame.reverb.enabled ? 'ON' : 'BYPASSED'}` : 'Reverb bypass unavailable'}</button><label>Tail policy<select aria-label="Reverb tail policy" disabled={!connected || !capability('reverbBypass') || !frame?.reverb} value={frame?.reverb?.tail ?? 'spill'} onChange={e => frame?.reverb && void send({ type: 'reverb_bypass', enabled: frame.reverb.enabled, tail: e.target.value as 'kill' | 'spill' })}><option value="spill">Spill</option><option value="kill">Kill</option></select></label><p>{frame?.reverb && capability('reverbBypass') ? `Tank ${frame.reverb.dormant ? 'dormant' : 'processing'} · ${frame.reverb.tail} · enable gain ${frame.reverb.enableGain.toFixed(3)}` : 'Tail status and independent bypass are not supported by this host.'}</p><p>Wet controls dry/wet mix; zero is dry, not a bypass. Ensemble Off disables only Ensemble. Decay is uncalibrated; it is not room size.</p></div>}

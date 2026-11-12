@@ -3,8 +3,11 @@
 `crates/prophet-analysis` is an independent Rust workspace/library. It does not
 import the synth, an audio backend, React, network code or devices. The root
 workspace/lockfile and the baseline DSP are untouched. The host must call it in
-an analysis worker, never the audio callback. It is implemented and tested in
-isolation; the running v1 host does **not** yet produce continuous analysis data.
+an analysis worker, never the audio callback. The original baseline v1 host does
+not produce continuous data. Agent B's `211c4f44` checkpoint now supplies the
+real `/api/v1/capture` extension; the optional WASM packet bridge is described in
+[WASM.md](WASM.md). Producer availability and successful browser integration are
+separate claims.
 
 ## Build and validate
 
@@ -80,25 +83,27 @@ borrowed spectrum and `FrameMetadata`, preventing an implicit growing result
 queue. Packet validation scans before mutation; an invalid packet produces no
 partial spectrum.
 
-Agent B must implement the producer and transport. Suggested versioned producer
-payload, **not an endpoint implemented by this change**:
+Agent B's checkpoint implements a bounded producer and authenticated WebSocket
+at `/api/v1/capture`. This analysis crate does not implement that endpoint. Its
+actual v1 message is:
 
 ```text
-streamId: string             changes on restart/rate/config change
-sequence: u64                increases once per packet
-firstSample: u64             absolute sample index in streamId
-sampleRate: number           exact producer sample rate
-channel: "mono-left"         explicit channel/downmix convention
-samples: contiguous f32[]    packet maximum negotiated and bounded
-droppedPackets: u64          producer overflow counter
+{"v":1,"blocks":[{
+  "sequence": N,
+  "firstFrame": F,
+  "sampleRate": FS,
+  "samples": [/* at most 64 contiguous actual post-FX/master left samples */]
+}]}
 ```
 
-The callback producer may copy a bounded sample block into an existing bounded
-SPSC ring and increment counters, dropping a complete packet on overflow. Window
-generation, FFT, JSON/network I/O and UI drawing belong to workers. Consumer
-results should use a capacity-one latest-frame slot for UI publication. A slow
-chart drops old completed analysis frames rather than increasing audio latency.
-No claim of RT deadline impact is made until B integrates/measures that path.
+The B producer uses a preallocated 256-chunk SPSC and an eight-message broadcast;
+sequence increments on drops. Reconnect or a sample-rate change creates a new
+client stream generation by replacing the analyzer. There is no `streamId`
+field in this native checkpoint. Window generation, FFT, JSON/network I/O and UI
+drawing belong to workers. Consumer results should use a capacity-one
+latest-frame slot for UI publication. A slow chart drops old completed analysis
+frames rather than increasing audio latency. The bridge makes no additional RT
+deadline qualification claim; see B's own measured performance limitations.
 
 The v1 `scope[1024]` snapshots at ~25 Hz contain unknown inter-snapshot gaps.
 They remain suitable for a labelled waveform/single captured frame, **not** for
@@ -196,8 +201,9 @@ cost/portability choice, not a speed claim.
 
 ## Remaining integration work
 
-- Agent B: bounded continuous producer/analysis worker, versioned capabilities,
-  result metadata, telemetry endpoint and sample-rate/generation semantics.
+- The B checkpoint's native continuous producer is available. Browser Worker
+  integration is implemented separately in `ui/` and must be tested against that
+  actual endpoint; v1 baseline hosts continue to show unsupported.
 - Agent B: actual VCF impulse generation, convergence extension and endpoint
   replacement; the current v1 DTFT endpoint remains unchanged.
 - Native ARM64 execution and timing, integrated audio-load/deadline tests, and

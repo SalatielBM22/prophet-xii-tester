@@ -1,0 +1,44 @@
+   Compiling prophet-analysis v1.0.0 (/workspace/prophet-xii/crates/prophet-analysis)
+    Finished `release` profile [optimized] target(s) in 14.96s
+     Running unittests src/lib.rs (target/release/build/prophet-analysis/ca496ba6cbd2d025/out/prophet_analysis-ca496ba6cbd2d025)
+
+running 2 tests
+test web::tests::browser_packets_match_native_spectrum_and_timestamps ... ok
+test web::tests::invalid_browser_inputs_do_not_change_sequence_state ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/accuracy.rs (target/release/build/prophet-analysis/ef906d35e32bbfad/out/accuracy-ef906d35e32bbfad)
+
+running 15 tests
+test coherent_gain_enbw_and_psd_parseval ... ok
+test dc_and_nyquist_are_not_doubled ... ok
+test invalid_configuration_is_rejected ... ok
+test blackman_harris_reduces_far_sidelobes ... ok
+test impulse_silence_subnormal_and_invalid_samples ... ok
+test off_bin_scalloping_and_two_tone_separation ... ok
+test power_averaging_and_configurable_peak_hold ... ok
+test realfft_forward_inverse_roundtrip_at_all_supported_sizes ... ok
+test spectrum_agrees_with_independent_direct_dft ... ok
+test stft_contiguous_packet_partition_and_gap_reset ... ok
+test noise_power_and_pink_spectral_tilt ... ok
+test transfer_unwrap_mask_cancellation_and_tail_diagnostic ... ok
+test calibrated_sines_all_sizes_rates_and_windows ... ok
+test transfer_complex_interpolation_matches_dtft_at_48_and_96k ... ok
+test resonant_transfer_dtft_agreement_and_tail ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/allocations.rs (target/release/build/prophet-analysis/a5381925c8b4ce91/out/allocations-a5381925c8b4ce91)
+
+running 1 test
+test no_allocations_after_planning_in_spectrum_stft_transfer ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests prophet_analysis
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

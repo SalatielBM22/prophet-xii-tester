@@ -8,9 +8,19 @@ description = "Device-independent, non-real-time R2C spectrum/STFT and transfer 
 # Independently reviewable/buildable until Agent B integrates the analysis worker.
 [workspace]
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+web = ["dep:wasm-bindgen"]
+
 [dependencies]
 realfft = "=3.5.0"
 rustfft = "=6.4.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "=0.2.130", optional = true }
 
 [[bench]]
 name = "fft"

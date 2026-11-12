@@ -6,8 +6,12 @@
 mod spectrum;
 mod stream;
 mod transfer;
+#[cfg(feature = "web")]
+mod web;
 pub use spectrum::{Config, Error, SpectrumAnalyzer, SpectrumView, Window, WindowMetrics};
 pub use stream::{FrameMetadata, Stft};
 pub use transfer::{
     log_frequencies, RequestClock, RequestToken, TransferAnalyzer, TransferMetadata, TransferPoint,
 };
+#[cfg(feature = "web")]
+pub use web::WebAnalyzer;
