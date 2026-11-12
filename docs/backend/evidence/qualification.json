@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-12",
+  "status": "FAILED",
+  "scope": "RT qualification fails; selected software checks are PROVEN, physical/device qualification OPEN",
+  "provenance": "HOST_VERIFIED",
+  "baseline": "b47f2d60c7005cd6c81694c0e17c76f7a4f107dc",
+  "tested_source_commit": "44c55f3182414226e9861e7e97c82f67db834511",
+  "rt_branch": "430e4d8bf0fbf6d052f2822294b3fbef1c04e1ab",
+  "rust": {
+    "command": "cargo test --release --locked --workspace",
+    "exit_code": 0,
+    "passed": 41,
+    "failed": 0,
+    "ignored": 0,
+    "runners": 26
+  },
+  "clippy": {
+    "command": "cargo clippy --release --locked --workspace --all-targets",
+    "exit_code": 0,
+    "warning_lines": 107,
+    "warning_clean": false
+  },
+  "matrix": {
+    "final_cases": 432,
+    "measured_callbacks": 43200,
+    "allocations": 0,
+    "subnormal_outputs": 0,
+    "all_outputs_finite": true,
+    "dry_hashes_matching_baseline": 48
+  },
+  "other_passed": [
+    "native HTTP/WebSocket PCM contract 96k/128",
+    "CLAP stereo MIDI/sample offset and state",
+    "CLAP reverb default/edit/state restore",
+    "12-voice repeated WAV bytes at 48/96k",
+    "MIDI file render 48/96k",
+    "AArch64 ELF DSP object and ARM control/params builds",
+    "Android AAudio/JNI target typecheck",
+    "Windows WASAPI target typecheck",
+    "129 original artifact hashes unchanged"
+  ],
+  "failed": [
+    "12-voice Moog 4x deadlines (100/100 misses in selected 48k/256 case)",
+    "Full-system RT60 calibration"
+  ],
+  "not_tested": [
+    "SPICE/netlist comparisons",
+    "native Windows or physical ALSA loopback",
+    "driver XRun/device queue and fault recovery",
+    "Android linked APK, emulator or Moto G8",
+    "full per-parameter musical sensitivity/multiband RT60/shimmer pitch/long freeze drift",
+    "durable MIDI mappings and JNI capture/timestamp parity"
+  ],
+  "source_access": "Primary datasheet/paper/service manual requests denied with proxy HTTP 403; see primary-source-access.json",
+  "clap_sdk": {
+    "tag": "1.2.6",
+    "git_tag_ref": "69a69252fdd6ac1d06e246d9a04c0a89d9607a17",
+    "sha256": "6548b5831ad9e92551c752753e535b18fead4001165ef1df8e643efefa7133b7"
+  },
+  "changes_preserved": {
+    "ui": true,
+    "root_manifest": true,
+    "lockfile": true,
+    "original_artifacts": true,
+    "no_push": true,
+    "no_device_installation": true
+  }
+}

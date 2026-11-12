@@ -1,0 +1,38 @@
+[
+  {
+    "path": "/workspace/.prophet-build/agent-b/renders/twelve-48000-a.wav",
+    "sha256": "2098c7d07f4c4377ce35fbb74e5cfed68d3f9fc3a03633bd0b922f40258551a0",
+    "rate": 48000,
+    "channels": 2,
+    "width": 2,
+    "frames": 48000,
+    "deterministic_pair": true
+  },
+  {
+    "path": "/workspace/.prophet-build/agent-b/renders/midi-48000.wav",
+    "sha256": "5b1f0214dab07bf3cb6fa5f2144e3b66ba0ea67008e96fe5cb650687dc5478ab",
+    "rate": 48000,
+    "channels": 2,
+    "width": 2,
+    "frames": 264000,
+    "deterministic_pair": false
+  },
+  {
+    "path": "/workspace/.prophet-build/agent-b/renders/twelve-96000-a.wav",
+    "sha256": "a4f20d8370689556b64b3a0e92ea9801e08a4bf1f6805504cc812fefe069a6b9",
+    "rate": 96000,
+    "channels": 2,
+    "width": 2,
+    "frames": 96000,
+    "deterministic_pair": true
+  },
+  {
+    "path": "/workspace/.prophet-build/agent-b/renders/midi-96000.wav",
+    "sha256": "25e6cd4121f2c1b24a64ce24b228f3e31f85df06c5bcafde1a84a1c98a5e6da0",
+    "rate": 96000,
+    "channels": 2,
+    "width": 2,
+    "frames": 528000,
+    "deterministic_pair": false
+  }
+]

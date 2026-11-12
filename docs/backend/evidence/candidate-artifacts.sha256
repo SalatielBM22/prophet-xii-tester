@@ -1,0 +1,6 @@
+9e1b8bcf460c70f3f7ecd4e3a37e2f704cade2dfe5b1a4adb01ab48058f35424  target/release/prophet-standalone
+4705ef27ccb71f9a47af404a5bdba66cb846c2d2ad590c5e4f2115fc0eedb382  target/release/prophet-render
+fc6e620b7f5ce75fd23acb8c512fbe54d42d0c66343e979ebd3f8db506116671  target/release/libprophet_plugin.so
+e2497b3cb3dc94f0cbc977687afdccf90b3ae8fb7907b92f0695e312681fa230  target/aarch64-unknown-linux-gnu/release/libprophet_dsp.rlib
+512d9d5fdec5b29f9738a1d222a38343f1b7d89f95034babaa1e357ffb0693cb  /workspace/.prophet-build/agent-b/prophet-dsp-aarch64.o
+6548b5831ad9e92551c752753e535b18fead4001165ef1df8e643efefa7133b7  /workspace/.prophet-tools/clap-sdk-1.2.6.tar.gz

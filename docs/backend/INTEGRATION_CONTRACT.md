@@ -121,6 +121,12 @@ sample-rate change. No interpolation or zero filling may disguise a gap.
 The older `scope[1024]` is a visualization snapshot, **not** continuous STFT input.
 No FFT, windows, transport, serialization or lock is in the callback.
 
+The legacy `/api/v1/filter` remains the original 48 kHz direct-DTFT worker. It is
+not live FFT and is not converted to Agent A's new analysis crate here. Its fixed
+rate and unbounded concurrent worker requests remain OPEN for Agent A's
+coalesced analysis integration; do not label that response with the current
+device's rate or assume concurrent measurement workers cannot contend with RT.
+
 ## Timing/backend interpretation
 
 `callback`: observed frames, processingUs, inter-callback intervalUs, mean/p50/
@@ -137,6 +143,13 @@ not a loopback measurement or a complete count of ALSA/Pulse/WSLg queues.
 `deviceErrors` counts callback error notifications; legacy `underruns` aliases it.
 `driverXruns:null` is deliberate on CPAL: no comprehensive XRun counter exists
 here. Deadline misses are CPU budget exceedances, a different metric.
+
+`ready:true` means a snapshot has been produced; it is not an ongoing device
+health guarantee. A stopped callback can leave a stale last snapshot. Consumers
+must watch frame/sequence advancement; a recovery/watchdog state machine is not
+implemented. The inactive voice optimization also pauses its unused filter
+envelope when the amplifier is Idle; draw voice activity from the mask rather
+than assuming every retained envelope stage is audible.
 
 `--sample-rate HZ`, `--buffer-frames N` allow explicit requests. Known ranges
 default toward 256 frames; out-of-range requests fail. Unknown ranges use backend
