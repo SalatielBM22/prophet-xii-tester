@@ -68,7 +68,10 @@ impl Butterworth4PoleLp {
         let lp2 = g * bp2 + self.s4;
         self.s4 = g * bp2 + lp2;
 
-        lp2
+        for s in [&mut self.s1,&mut self.s2,&mut self.s3,&mut self.s4] {
+            if s.abs()<1e-20 { *s=0.; }
+        }
+        if lp2.abs()<1e-20 {0.} else {lp2}
     }
 }
 
@@ -246,11 +249,12 @@ impl Juno106BbdChorus {
         for i in 0..2 {
             self.deemphasis[i] += c * (wet[i] - self.deemphasis[i]);
             wet[i] = (2.0 * wet[i] + self.deemphasis[i]) / 3.0;
-            let dc = wet[i] - self.dc_prev[i]
-                + self.dc_coeff * self.dc_out[i];
+            let dc = wet[i] - self.dc_prev[i] + self.dc_coeff * self.dc_out[i];
             self.dc_prev[i] = wet[i];
-            self.dc_out[i] = dc;
-            wet[i] = dc;
+            self.dc_out[i] = if dc.abs()<1e-20 {0.} else {dc};
+            if self.deemphasis[i].abs()<1e-20 {self.deemphasis[i]=0.;}
+            if self.emphasis_lp[i].abs()<1e-20 {self.emphasis_lp[i]=0.;}
+            wet[i] = self.dc_out[i];
         }
         let (wet_l, wet_r) = (wet[0], wet[1]);
 

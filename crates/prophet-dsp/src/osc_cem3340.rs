@@ -172,7 +172,7 @@ impl Cem3340DualVco {
             count += 1.0;
         }
         if count > 1.0 {
-            let norm = 0.70710678; // 1 / sqrt(2) headroom normalization when both Saw + Pulse are active
+            let norm = core::f32::consts::FRAC_1_SQRT_2; // 1 / sqrt(2) headroom normalization when both Saw + Pulse are active
             (amp * norm, slope * norm)
         } else {
             (amp, slope)
@@ -272,7 +272,7 @@ impl Cem3340DualVco {
 
         // --- 2. Slave Oscillator A Progression + Exact Sub-Sample Hard Sync ---
         let norm_a = if waves_a.saw && waves_a.pulse {
-            0.70710678
+            core::f32::consts::FRAC_1_SQRT_2
         } else {
             1.0
         };
