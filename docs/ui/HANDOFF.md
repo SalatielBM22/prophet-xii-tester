@@ -3,6 +3,20 @@
 Work was frozen for publication and handoff. No new implementation or test runs
 were started after the stop request. Pending checks below remain pending.
 
+Publication was attempted with only the two authorized refs and without force or
+tag pushes. The remote rejected both with `permission denied`. `git ls-remote`
+confirmed that neither Agent A branch was published; only main and B's two refs
+were present. The attempted heads were controls
+`096a63c3b3984095e581fa0a839da5890e87c6cf` and analysis/code checkpoint
+`5f08ea2b9c442443b7bf00f1ec560a3a4b1d119b`. This publication-status note is a
+following documentation commit. No additional code/test changes were made.
+
+The final recoverable bundle is
+`/workspace/.prophet-cloud/task-a/preservation/agent-a-final.bundle`. To transfer
+the branches into an authorized checkout, fetch those two named refs from that
+bundle, inspect them and push the explicit branch refs to the fork. This requires
+working write authorization for that repository; no token values belong in chat.
+
 ## Branches and provenance
 
 - `fix/ui-controls-issue-2`: original commits `31fae3c`, `4332def`, `3098599`,
