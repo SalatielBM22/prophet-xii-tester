@@ -8,7 +8,8 @@
 use crate::vcf_cem3320::{fast_sech2, fast_tanh, Cem3320Filter};
 use core::f32::consts::PI;
 
-/// Moog Transistor Ladder 24 dB/oct ZDF Filter with per-stage BJT thermal voltage saturation
+/// Normalized, physically inspired ladder ODE with per-stage rational saturation.
+/// Drive has no measured mapping to BJT thermal voltage or control current.
 /// and optional Passband Bass Compensation.
 #[repr(C, align(32))]
 #[derive(Clone, Debug)]
@@ -20,7 +21,7 @@ pub struct MoogLadderFilter {
     pub sample_rate: f32,
     pub cutoff_hz: f32,
     pub resonance: f32,
-    /// Thermal saturation drive (models 1 / (2 * V_T) scaling)
+    /// Dimensionless saturation drive; not calibrated to 1/(2 V_T).
     pub drive: f32,
     /// Bass compensation amount in [0.0, 1.0] (restores 6..12 dB passband loss at high Q)
     pub bass_compensation: f32,
@@ -151,7 +152,7 @@ impl MoogLadderFilter {
 pub struct DualVcfStage {
     pub cem3320: Cem3320Filter,
     pub moog_ladder: MoogLadderFilter,
-    /// `0.0` = 100% CEM3320, `1.0` = 100% Moog Ladder, intermediate = phase-coherent equal-power morph
+    /// `0.0` = 100% CEM3320, `1.0` = 100% Moog Ladder, intermediate = linear output blend (no phase/energy equivalence asserted)
     pub topology_morph: f32,
 }
 
@@ -185,7 +186,17 @@ impl DualVcfStage {
         bass_compensation: f32,
         topology_morph: f32,
     ) {
-        self.topology_morph = topology_morph.clamp(0.0, 1.0);
+        let next = topology_morph.clamp(0.0, 1.0);
+        // Endpoint-inactive branches are not integrated. Reset on re-entry,
+        // rather than exposing a tail frozen at an unrelated earlier input.
+        // The kernel's existing 5 ms morph smoother performs the crossfade.
+        if self.topology_morph <= 0.0001 && next > 0.0001 {
+            self.moog_ladder.reset();
+        }
+        if self.topology_morph >= 0.9999 && next < 0.9999 {
+            self.cem3320.reset();
+        }
+        self.topology_morph = next;
         self.cem3320.set_params(cutoff_hz, resonance, drive);
         self.moog_ladder
             .set_params(cutoff_hz, resonance, drive, bass_compensation);
@@ -201,7 +212,8 @@ impl DualVcfStage {
         } else {
             let out_cem = self.cem3320.process_sample(input);
             let out_moog = self.moog_ladder.process_sample(input);
-            // Phase-coherent linear/equal-energy blend (both filters share identical TPT pre-warping)
+            // Linear convex blend. Prewarping alone establishes neither phase
+            // agreement nor equal power for these different nonlinear systems.
             out_cem * (1.0 - m) + out_moog * m
         }
     }

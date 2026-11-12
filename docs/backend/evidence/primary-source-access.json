@@ -1,0 +1,22 @@
+[
+  {
+    "url": "https://www.digisound80.co.uk/digisound/other_documents/brochure_files/CEM3320.pdf",
+    "status": "OPEN",
+    "error": "<urlopen error Tunnel connection failed: 403 Forbidden>"
+  },
+  {
+    "url": "https://www.digisound80.co.uk/digisound/other_documents/brochure_files/CEM3310.pdf",
+    "status": "OPEN",
+    "error": "<urlopen error Tunnel connection failed: 403 Forbidden>"
+  },
+  {
+    "url": "https://dafx.de/paper-archive/2004/P_061.PDF",
+    "status": "OPEN",
+    "error": "<urlopen error Tunnel connection failed: 403 Forbidden>"
+  },
+  {
+    "url": "https://www.kiwitechnics.com/downloads/Kiwi-106/Roland%20Juno-106%20Service%20Manual.pdf",
+    "status": "OPEN",
+    "error": "<urlopen error Tunnel connection failed: 403 Forbidden>"
+  }
+]

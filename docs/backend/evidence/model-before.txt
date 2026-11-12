@@ -1,0 +1,37 @@
+warning: unused field `authors` in `workspace.package`
+  --> Cargo.toml:17:1
+   |
+17 | authors = ["PROPHET-XII DSP Engineering Team"]
+   | ^^^^^^^
+   |
+   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default
+help: consider removing the field `workspace.package.authors`
+warning: workspace (manifest) generated 1 warning
+    Blocking waiting for file lock on build directory
+   Compiling prophet-dsp v1.0.0 (/workspace/prophet-xii-tester/crates/prophet-dsp)
+    Finished `release` profile [optimized] target(s) in 40.66s
+     Running tests/model_contract.rs (target/release/build/prophet-dsp/b05e9a5e5e33c55e/out/model_contract-b05e9a5e5e33c55e)
+
+running 4 tests
+test rational_saturator_derivative_matches_independent_finite_difference ... ok
+test morph_does_not_reintroduce_frozen_filter_state ... FAILED
+test envelope_progress_uses_time_and_reports_indefinite_sustain ... ok
+test four_pole_small_signal_matches_bilinear_analytic_transfer ... ok
+
+failures:
+
+---- morph_does_not_reintroduce_frozen_filter_state stdout ----
+
+thread 'morph_does_not_reintroduce_frozen_filter_state' (17639) panicked at crates/prophet-dsp/tests/model_contract.rs:35:40:
+assertion `left == right` failed
+  left: [0.14030078, 0.14024481, 0.1414446, 0.14271733]
+ right: [0.0, 0.0, 0.0, 0.0]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    morph_does_not_reintroduce_frozen_filter_state
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `-p prophet-dsp --test model_contract`

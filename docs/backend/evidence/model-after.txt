@@ -1,0 +1,12 @@
+Running tests/model_contract.rs (target/release/build/prophet-dsp/4fa7749e39e0fab5/out/model_contract-4fa7749e39e0fab5)
+
+running 7 tests
+test linear_morph_ramp_has_bounded_dc_transition_in_both_directions ... ok
+test morph_does_not_reintroduce_frozen_filter_state ... ok
+test oversampling_reported_latency_matches_generation_impulse ... ok
+test envelope_progress_uses_time_and_reports_indefinite_sustain ... ok
+test rational_saturator_derivative_matches_independent_finite_difference ... ok
+test four_pole_small_signal_matches_bilinear_analytic_transfer ... ok
+test chorus_tail_reaches_exact_silence_without_output_subnormals ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s

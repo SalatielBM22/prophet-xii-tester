@@ -8,7 +8,7 @@
 use core::f32::consts::PI;
 
 /// Fast and accurate Padé rational approximation of `tanh(x)` for real-time audio saturation,
-/// with exact saturation asymptotes `+/- 1.0` for `|x| >= 3.2`.
+/// with saturation at `+/- 1.0` for `|x| >= 3.0`.
 #[inline(always)]
 pub fn fast_tanh(x: f32) -> f32 {
     let xc = x.clamp(-3.0, 3.0);
@@ -16,7 +16,8 @@ pub fn fast_tanh(x: f32) -> f32 {
     xc * (27.0 + x2) / (27.0 + 9.0 * x2)
 }
 
-/// Derivative `sech^2(x) = 1 - tanh^2(x)` for Newton-Raphson ZDF iteration.
+/// Exact derivative of the clamped rational fast_tanh, not the true sech^2.
+/// Keeping residual and derivative consistent matters for Newton convergence.
 #[inline(always)]
 pub fn fast_sech2(x: f32) -> f32 {
     if x.abs() >= 3.0 {
@@ -26,7 +27,7 @@ pub fn fast_sech2(x: f32) -> f32 {
     9.0 * (x * x - 9.0).powi(2) / (q * q)
 }
 
-/// Curtis CEM3320 4-Pole Low-Pass ZDF/TPT Filter (Prophet-10 Rev3 Authentic Mode).
+/// Curtis CEM3320 4-Pole Low-Pass ZDF/TPT Filter (topology-inspired VA model, not circuit calibrated).
 #[repr(C, align(32))]
 #[derive(Clone, Debug)]
 pub struct Cem3320Filter {
@@ -99,7 +100,7 @@ impl Cem3320Filter {
     /// Each trapezoidal integrator satisfies:
     ///   `v_i = G * (x_i - s_i)`, `y_i = v_i + s_i`, `s_{i,next} = y_i + v_i`
     /// Consequently:
-    ///   `y_4 = G^4 * u + S`, where `S = G^3 * s_1 + G^2 * s_2 + G * s_3 + s_4`
+    ///   `y_4 = G^4 * u + S`, where `S = (1-G)*(G^3 * s_1 + G^2 * s_2 + G * s_3 + s_4)`
     /// And the non-linear differential feedback limiter with 5 Hz AC coupling satisfies:
     ///   `u = x_in - k * tanh(drive * HP_5Hz(y_4))`
     /// Solved algebraically with Newton-Raphson zero-delay feedback iteration.
@@ -126,7 +127,7 @@ impl Cem3320Filter {
         let linear_denom = 1.0 + k * g4 * hp_gain;
         let mut y4 = (g4 * input + big_s) / linear_denom;
 
-        // 2-step Newton-Raphson exact non-linear ZDF solution for F(y4) = 0:
+        // At most 6 Newton iterations for the rational nonlinear feedback root:
         // F(y4) = y4 - G^4 * (input - k * inv_drv * tanh(drv * (hp_gain * y4 - dc_block_state))) - S = 0
         for _ in 0..6 {
             let y_hp = hp_gain * (y4 - self.dc_block_state);
