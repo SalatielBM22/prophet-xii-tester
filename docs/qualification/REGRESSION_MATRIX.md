@@ -64,5 +64,5 @@ A magnitude do desvio escala monotonicamente com `ReverbWet` (`0.06 → 0.68`) e
 
 ## 4. Integridade dos Manifestos Históricos
 
-- **`docs/analysis/SHA256SUMS`**: **24 / 24 OK** (`rust-and-analysis.log`). O pacote `crates/prophet-analysis` não foi modificado; a reutilização em host foi feita via ponte [`crates/prophet-analysis-core`](file:///home/antigravity/SalatielBM22/prophet-xii-tester/crates/prophet-analysis-core/src/lib.rs).
+- **`docs/analysis/SHA256SUMS`**: **23 / 23 OK** (`rust-and-analysis.log`). O pacote `crates/prophet-analysis` não foi modificado; a reutilização em host foi feita via ponte [`crates/prophet-analysis-core`](file:///home/antigravity/SalatielBM22/prophet-xii-tester/crates/prophet-analysis-core/src/lib.rs).
 - **`docs/backend/evidence/baseline-artifacts.sha256` (129 linhas)**: **128 / 128 artefatos entregues OK** (`binaries/**`, `evidence/**`, `presets/**`). Apenas a linha 1 (`Cargo.lock`, anteriormente `ba4bfbc2...`) mudou para `069763ff...` (+75 linhas em `a787284`) ao incorporar o membro `prophet-analysis-core` e travar suas dependências no workspace raiz; a `Cargo.lock` original permanece íntegra na baseline `b47f2d6`.
