@@ -334,22 +334,175 @@ fn stream_for<T: cpal::SizedSample + cpal::FromSample<f32>>(
         None,
     )
 }
+fn resolve_ui_dir(explicit: Option<PathBuf>) -> PathBuf {
+    if let Some(path) = explicit {
+        return path;
+    }
+    let candidates = [
+        PathBuf::from("ui/dist"),
+        PathBuf::from("ui"),
+        PathBuf::from("../ui"),
+        PathBuf::from("../ui/dist"),
+    ];
+    for candidate in &candidates {
+        if candidate.join("index.html").is_file() {
+            return candidate.clone();
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for rel in ["ui", "ui/dist", "../ui", "../ui/dist", "../../ui/dist"] {
+                let candidate = dir.join(rel);
+                if candidate.join("index.html").is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    PathBuf::from("ui/dist")
+}
+
+fn browser_open_url(addr: std::net::SocketAddr) -> String {
+    if addr.ip().is_unspecified() {
+        if addr.is_ipv4() {
+            format!("http://127.0.0.1:{}", addr.port())
+        } else {
+            format!("http://[::1]:{}", addr.port())
+        }
+    } else {
+        format!("http://{addr}")
+    }
+}
+
+fn launch_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = std::process::Command::new("xdg-open").arg(url).spawn();
+
+    match status {
+        Ok(_) => println!("Launched default browser: {url}"),
+        Err(err) => eprintln!("Warning: could not launch browser for {url}: {err}"),
+    }
+}
+
+fn format_device_capabilities(device: &cpal::Device) -> String {
+    let Ok(ranges) = device.supported_output_configs() else {
+        return "capabilities unavailable".to_string();
+    };
+    let mut channels = Vec::new();
+    let mut min_sr = u32::MAX;
+    let mut max_sr = 0u32;
+    let mut formats = Vec::new();
+    for r in ranges {
+        let ch = r.channels();
+        if !channels.contains(&ch) {
+            channels.push(ch);
+        }
+        min_sr = min_sr.min(r.min_sample_rate().0);
+        max_sr = max_sr.max(r.max_sample_rate().0);
+        let fmt = format!("{:?}", r.sample_format());
+        if !formats.contains(&fmt) {
+            formats.push(fmt);
+        }
+    }
+    if channels.is_empty() {
+        return "no reported output stream configs".to_string();
+    }
+    channels.sort_unstable();
+    let ch_str = channels
+        .iter()
+        .map(|c| format!("{c}ch"))
+        .collect::<Vec<_>>()
+        .join("/");
+    let sr_str = if min_sr == max_sr {
+        format!("{min_sr} Hz")
+    } else {
+        format!("{min_sr}..{max_sr} Hz")
+    };
+    format!("{ch_str} | {sr_str} | [{}]", formats.join(", "))
+}
+
+fn print_devices(host: &cpal::Host) -> Result<(), Box<dyn Error>> {
+    println!("Audio host backend: {:?}", host.id());
+    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+    println!("Output devices:");
+    let mut count = 0usize;
+    for (idx, d) in host.output_devices()?.enumerate() {
+        count += 1;
+        let name = d.name().unwrap_or_else(|_| "<unknown>".to_string());
+        let default_tag = if default_name.as_ref() == Some(&name) {
+            " (default)"
+        } else {
+            ""
+        };
+        let caps = format_device_capabilities(&d);
+        println!("  [{idx}] {name}{default_tag} — {caps}");
+    }
+    if count == 0 {
+        println!("  (no output audio devices found)");
+    }
+    println!("MIDI input ports:");
+    match midir::MidiInput::new("PROPHET-XII") {
+        Ok(input) => {
+            let ports = input.ports();
+            if ports.is_empty() {
+                println!("  (no MIDI input ports found)");
+            } else {
+                for (idx, p) in ports.iter().enumerate() {
+                    let pname = input
+                        .port_name(p)
+                        .unwrap_or_else(|_| "<unknown>".to_string());
+                    println!("  [{idx}] {pname}");
+                }
+            }
+        }
+        Err(err) => println!("  (MIDI enumeration unavailable: {err})"),
+    }
+    Ok(())
+}
+
+fn print_help() {
+    println!(
+        concat!(
+            "PROPHET-XII Standalone Synthesizer v{}\n",
+            "Usage: prophet-standalone [OPTIONS]\n\n",
+            "Options:\n",
+            "  --bind ADDR           HTTP/WebSocket control bind address (default: 127.0.0.1:8787)\n",
+            "  --ui DIR              Path to built web UI directory containing index.html (auto-detected if omitted)\n",
+            "  --open                Open the control UI URL in the default browser after startup (skipped with --null)\n",
+            "  --device NAME         Select output audio device by exact name (see --list-devices)\n",
+            "  --list-devices        List audio host backend, output devices, capabilities, and MIDI input ports\n",
+            "  --midi-port INDEX     Connect MIDI input port by index\n",
+            "  --sample-rate HZ      Sample rate in 8000..192000 (default: 48000)\n",
+            "  --buffer-frames N     Audio callback block size in frames (default: 256 when supported)\n",
+            "  --demo                Trigger an initial demo chord on startup\n",
+            "  --duration SECONDS    Run for SECONDS then exit cleanly\n",
+            "  --null                Use software null-sink audio clock (explicit test mode, no audio device)\n",
+            "  --help                Print this help message\n\n",
+            "Security: Binding to a non-loopback address requires PROPHET_CONTROL_TOKEN (>= 16 chars)."
+        ),
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |k: &str| args.iter().any(|v| v == k);
     let val = |k: &str| args.windows(2).find(|v| v[0] == k).map(|v| v[1].clone());
     if has("--help") {
-        println!("prophet-standalone [--bind 127.0.0.1:8787] [--ui ui/dist] [--device NAME] [--midi-port 0] [--duration SECONDS] [--demo] [--null] [--buffer-frames N] [--sample-rate HZ]\nRemote bind requires PROPHET_CONTROL_TOKEN. --null is an explicit test sink, without audio device.");
+        print_help();
         return Ok(());
     }
     // CPAL's native Windows host is WASAPI; no ASIO dependency is enabled.
     let host = cpal::default_host();
     if has("--list-devices") {
-        for d in host.output_devices()? {
-            println!("{}", d.name()?)
-        }
-        return Ok(());
+        return print_devices(&host);
     }
     let bind = val("--bind").unwrap_or("127.0.0.1:8787".into());
     let addr: std::net::SocketAddr = bind.parse()?;
@@ -515,6 +668,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
     let _stream;
+    let audio_summary: String;
     if let Some(device) = device {
         let supported = config.unwrap();
         let mut cfg = supported.config();
@@ -534,15 +688,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 cpal::BufferSize::Default
             }
         };
+        let device_name = device.name()?;
         eprintln!(
             "Backend {:?}, requested buffer {:?}",
             host.id(),
             cfg.buffer_size
         );
         eprintln!(
-            "Audio device: {} / {} Hz / {} channels / {:?}",
-            device.name()?,
+            "Audio device: {device_name} / {sr} Hz / {} channels / {:?}",
+            cfg.channels,
+            supported.sample_format()
+        );
+        audio_summary = format!(
+            "{:?} | {} | {} Hz | {:?} | {}ch | {:?}",
+            host.id(),
+            device_name,
             sr,
+            cfg.buffer_size,
             cfg.channels,
             supported.sample_format()
         );
@@ -555,9 +717,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _stream.as_ref().unwrap().play()?;
     } else {
         _stream = None;
+        let block = requested_buffer.unwrap_or(256) as usize;
         eprintln!("NULL TEST SINK: no playback device");
+        audio_summary = format!("NULL TEST SINK | {sr} Hz | {block} frames");
         std::thread::spawn(move || {
-            let block = requested_buffer.unwrap_or(256) as usize;
             if block > 8192 {
                 eprintln!("null buffer exceeds 8192 frames");
                 return;
@@ -579,7 +742,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         serde_json::json!({"id":p.id,"name":p.name,"category":p.category.as_str(),"values":values})
     }).collect::<Vec<_>>();
     let metadata = serde_json::json!({"v":1,"extensions":["envelope-stages","parameter-revisions","midi-learn-lifecycle","reverb-bypass","continuous-capture","callback-timing"],"parameters":PARAM_SPECS.iter().map(|s|serde_json::json!({"id":s.id as usize,"name":s.name,"min":s.min,"max":s.max,"integer":s.integer,"logarithmic":s.logarithmic,"group":s.group})).collect::<Vec<_>>(),"presets":preset_meta});
-    let static_dir = PathBuf::from(val("--ui").unwrap_or("ui/dist".into()));
+    let static_dir = resolve_ui_dir(val("--ui").map(PathBuf::from));
+    let ui_ready = static_dir.join("index.html").is_file();
+    if !ui_ready {
+        eprintln!(
+            "Note: UI index.html not found at '{}' (serving API-only; pass --ui PATH to serve web UI)",
+            static_dir.display()
+        );
+    }
     let app = Router::new()
         .route("/api/v1/command", post(command))
         .route("/api/v1/state", get(state))
@@ -590,7 +760,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "/api/v1/meta",
             get(move || async move { Json(metadata.clone()) }),
         )
-        .fallback_service(ServeDir::new(static_dir))
+        .fallback_service(ServeDir::new(&static_dir))
         .with_state(AppState {
             tx: tx.clone(),
             ids: ids.clone(),
@@ -602,7 +772,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             filter_permits: Arc::new(Semaphore::new(2)),
         });
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    println!("PROPHET-XII control: http://{bind}");
+    let local_addr = listener.local_addr()?;
+    let open_url = browser_open_url(local_addr);
+    println!("PROPHET-XII v{}", env!("CARGO_PKG_VERSION"));
+    println!("  Audio:   {audio_summary}");
+    println!(
+        "  UI dir:  {} ({})",
+        static_dir.display(),
+        if ui_ready {
+            "ready"
+        } else {
+            "API-only / missing index.html"
+        }
+    );
+    println!("PROPHET-XII control: http://{local_addr}");
+    if has("--open") {
+        if has("--null") {
+            eprintln!("Note: --open skipped in --null test sink mode");
+        } else {
+            launch_browser(&open_url);
+        }
+    }
     let duration = val("--duration").map(|v| v.parse::<u64>()).transpose()?;
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -622,4 +812,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_open_url_rewrites_unspecified_loopback() {
+        let ipv4: std::net::SocketAddr = "0.0.0.0:8787".parse().unwrap();
+        assert_eq!(browser_open_url(ipv4), "http://127.0.0.1:8787");
+        let ipv6: std::net::SocketAddr = "[::]:8787".parse().unwrap();
+        assert_eq!(browser_open_url(ipv6), "http://[::1]:8787");
+        let explicit: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
+        assert_eq!(browser_open_url(explicit), "http://127.0.0.1:9001");
+    }
+
+    #[test]
+    fn resolve_ui_dir_honors_explicit_path() {
+        let custom = PathBuf::from("custom/ui/path");
+        assert_eq!(resolve_ui_dir(Some(custom.clone())), custom);
+    }
 }
