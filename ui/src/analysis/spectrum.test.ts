@@ -24,9 +24,26 @@ describe('transfer display independent from live spectrum', () => {
     expect(f.phase[2]).toBeNull();
     expect(filterPath(f, true).match(/M/g)).toHaveLength(2);
   });
-  it('requires the actual sample rate on a v2 response', () => {
-    const f = { hz: [20, 20000], db: [0, -40], phase: [0, null] };
+  it('requires the actual sample rate on a v2 response and preserves pre-unwrapped phase', () => {
+    const f = { hz: [20, 200, 20000], db: [0, -10, -120], phase: [0, -7.5, null] };
     expect(decodeFilter(f, false)).toBeNull();
-    expect(decodeFilter({ ...f, sampleRate: 96000 }, false)?.sampleRate).toBe(96000);
+    const parsed = decodeFilter({
+      ...f,
+      sampleRate: 96000,
+      fftSize: 16384,
+      impulseSamples: 8192,
+      tailConverged: true,
+      tailRelativeRms: 1e-5,
+      binHz: 96000 / 16384,
+    }, false)!;
+    expect(parsed.sampleRate).toBe(96000);
+    expect(parsed.legacy).toBe(false);
+    expect(parsed.fftSize).toBe(16384);
+    expect(parsed.impulseSamples).toBe(8192);
+    expect(parsed.tailConverged).toBe(true);
+    expect(parsed.phase[1]).toBe(-7.5);
+    expect(parsed.phase[2]).toBeNull();
+    expect(decodeFilter({ ...f, sampleRate: 96000, fftSize: 1024 }, false)).toBeNull();
+    expect(decodeFilter({ ...f, sampleRate: 96000, tailConverged: 'yes' }, false)).toBeNull();
   });
 });

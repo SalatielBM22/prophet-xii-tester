@@ -433,24 +433,26 @@ for(const data of __startupMessages)self.dispatchEvent(new MessageEvent('message
             release.set()
             await expect(page.locator(".filterchart [role=status]")).to_have_text("Small-signal transfer response",timeout=10000)
             assert maximum==1 and len(calls)==2 and calls[-1]==1900,{"maxConcurrent":maximum,"calls":calls}
-            await expect(page.locator(".filterchart")).to_contain_text("48000 Hz fixed legacy DTFT measurement; independent of audio sample rate")
             values=self.api()["values"]
             request=urllib.request.Request(self.base+"/api/v1/filter",data=json.dumps(values).encode(),headers={"Content-Type":"application/json"})
             with urllib.request.urlopen(request,timeout=10) as response:data=json.load(response)
+            assert data["sampleRate"]==self.sample_rate,{"expectedSampleRate":self.sample_rate,"actual":data["sampleRate"]}
+            assert data["fftSize"]==data["impulseSamples"]*2 and data["impulseSamples"]>=4096
+            assert data["tailConverged"] is True
+            await expect(page.locator(".filterchart")).to_contain_text(f"{self.sample_rate} Hz · {data['fftSize']}-point FFT ({data['impulseSamples']} samples) · Δf {data['binHz']:.3f} Hz · tail converged")
             path=await page.get_by_role("img",name="VCF magnitude and unwrapped phase",exact=True).locator("path").nth(1).get_attribute("d")
             points=re.findall(r"([ML])(-?[0-9.]+),(-?[0-9.]+)",path)
-            expected=[];last=None
+            expected=[];drawing=False
             for hz,db,phase in zip(data["hz"],data["db"],data["phase"]):
-                if db < -100:last=None;continue
-                phase+=round((last-phase)/(2*math.pi))*2*math.pi if last is not None else 0
-                expected.append(("M" if last is None else "L",500*math.log(hz/data["hz"][0])/math.log(data["hz"][-1]/data["hz"][0]),75-phase*12))
-                last=phase
+                if phase is None or db < -100:drawing=False;continue
+                expected.append(("L" if drawing else "M",500*math.log(hz/data["hz"][0])/math.log(data["hz"][-1]/data["hz"][0]),75-phase*12))
+                drawing=True
             assert len(points)==len(expected)
             for actual,reference in zip(points,expected):
-                assert actual[0]==reference[0] and abs(float(actual[1])-reference[1])<.002 and abs(float(actual[2])-reference[2])<.002,"VCF graph differs from actual DTFT unwrap/mask"
+                assert actual[0]==reference[0] and abs(float(actual[1])-reference[1])<.002 and abs(float(actual[2])-reference[2])<.002,"VCF graph differs from actual FFT transfer unwrap/mask"
             for left,right in zip(points,points[1:]):
                 if right[0]=="L":assert abs(float(right[2])-float(left[2]))<=math.pi*12+.002,"Wrapped phase branch jump drawn as contiguous line"
-            self.observations["transfer"]={"audioSampleRate":self.sample_rate,"measurementSampleRate":48000,"maxConcurrent":maximum,"requestsDuringTenEdits":len(calls),"cutoffs":calls,"visiblePhasePoints":len(points),"maskedPhasePoints":len(data["db"])-len(points),"pixelTolerance":.002,"scope":"actual legacy DTFT response; latest-request coalescing and display unwrap/mask, not replacement of backend measurement algorithm"}
+            self.observations["transfer"]={"audioSampleRate":self.sample_rate,"measurementSampleRate":data["sampleRate"],"fftSize":data["fftSize"],"impulseSamples":data["impulseSamples"],"tailConverged":data["tailConverged"],"tailRelativeRms":data["tailRelativeRms"],"binHz":data["binHz"],"maxConcurrent":maximum,"requestsDuringTenEdits":len(calls),"cutoffs":calls,"visiblePhasePoints":len(points),"maskedPhasePoints":len(data["db"])-len(points),"pixelTolerance":.002,"scope":"actual prophet-analysis TransferAnalyzer impulse-response FFT at host sample rate with adaptive tail convergence"}
         finally:
             release.set()
             # Let any in-flight route finish before removing its handler.

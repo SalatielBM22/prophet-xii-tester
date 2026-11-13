@@ -24,7 +24,7 @@ use std::{
         Arc,
     },
 };
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch, Semaphore};
 use tower_http::services::ServeDir;
 #[derive(Clone)]
 struct AppState {
@@ -33,6 +33,9 @@ struct AppState {
     capture: broadcast::Sender<String>,
     telemetry: watch::Receiver<String>,
     token: Option<Arc<str>>,
+    sample_rate: f64,
+    filter_clock: prophet_analysis::RequestClock,
+    filter_permits: Arc<Semaphore>,
 }
 #[derive(Clone, Copy)]
 struct IngressCommand {
@@ -227,45 +230,36 @@ async fn filter_response(
     if !authorized(&s, &h, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    if values.len() != NUM_PARAMS || values.iter().any(|v| !v.is_finite()) {
+    let Ok(arr): Result<[f32; NUM_PARAMS], _> = values.try_into() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if arr.iter().any(|v| !v.is_finite()) {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let token = s.filter_clock.next();
+    let Ok(_permit) = s.filter_permits.acquire().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    if !token.is_current() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"superseded": true})),
+        )
+            .into_response();
+    }
+    let sample_rate = s.sample_rate;
     let result = tokio::task::spawn_blocking(move || {
-        use prophet_params::ParamId::*;
-        let mut f = prophet_dsp::vcf_moog::DualVcfStage::new(48000.0, 1.0);
-        f.set_params(
-            values[FilterCutoff as usize],
-            values[FilterResonance as usize],
-            values[FilterDrive as usize],
-            values[MoogBassComp as usize],
-            values[FilterMorph as usize],
-        );
-        let mut impulse = [0.0f32; 4096];
-        for (i, y) in impulse.iter_mut().enumerate() {
-            *y = f.process_sample(if i == 0 { 0.0001 } else { 0.0 }) / 0.0001;
-        }
-        let mut hz = Vec::new();
-        let mut db = Vec::new();
-        let mut phase = Vec::new();
-        for k in 0..256 {
-            let freq = 20.0f64 * 1000.0f64.powf(k as f64 / 255.0);
-            let mut re = 0.0;
-            let mut im = 0.0;
-            for (i, &v) in impulse.iter().enumerate() {
-                let a = -std::f64::consts::TAU * freq * i as f64 / 48000.0;
-                re += v as f64 * a.cos();
-                im += v as f64 * a.sin();
-            }
-            hz.push(freq);
-            db.push(20.0 * re.hypot(im).max(1e-9).log10());
-            phase.push(im.atan2(re));
-        }
-        serde_json::json!({"hz":hz,"db":db,"phase":phase})
+        prophet_standalone::transfer::compute_filter_transfer(&arr, sample_rate, Some(&token))
     })
     .await;
     match result {
-        Ok(v) => Json(v).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(Ok(data)) => Json(data).into_response(),
+        Ok(Err(prophet_analysis::Error::Superseded)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"superseded": true})),
+        )
+            .into_response(),
+        Ok(Err(_)) | Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 fn wire(t: &Telemetry, device_errors: u64) -> String {
@@ -603,6 +597,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             capture: capture_wire,
             telemetry: wire_rx,
             token,
+            sample_rate: sr as f64,
+            filter_clock: prophet_analysis::RequestClock::default(),
+            filter_permits: Arc::new(Semaphore::new(2)),
         });
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     println!("PROPHET-XII control: http://{bind}");

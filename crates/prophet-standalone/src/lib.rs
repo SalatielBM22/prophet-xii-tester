@@ -426,3 +426,111 @@ impl AudioProcessor {
         }
     }
 }
+
+pub mod transfer {
+    use prophet_analysis::{
+        log_frequencies, Error, RequestToken, TransferAnalyzer, TransferMetadata, TransferPoint,
+    };
+    use prophet_dsp::vcf_moog::DualVcfStage;
+    use prophet_params::ParamId::*;
+    use prophet_params::NUM_PARAMS;
+
+    #[derive(Clone, Debug, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FilterTransfer {
+        pub sample_rate: f64,
+        pub hz: Vec<f64>,
+        pub db: Vec<f64>,
+        pub phase: Vec<Option<f64>>,
+        pub fft_size: usize,
+        pub impulse_samples: usize,
+        pub tail_converged: bool,
+        pub tail_relative_rms: f64,
+        pub bin_hz: f64,
+    }
+
+    pub fn tail_converged(impulse: &[f64]) -> bool {
+        let energy = impulse.iter().map(|x| x * x).sum::<f64>();
+        if energy == 0.0 {
+            return true;
+        }
+        let tail = &impulse[impulse.len() * 7 / 8..];
+        let tail_energy = tail.iter().map(|x| x * x).sum::<f64>();
+        let rel = (tail_energy / tail.len() as f64 / (energy / impulse.len() as f64)).sqrt();
+        rel < 1e-4
+    }
+
+    pub fn compute_filter_transfer(
+        values: &[f32; NUM_PARAMS],
+        sample_rate: f64,
+        token: Option<&RequestToken>,
+    ) -> Result<FilterTransfer, Error> {
+        let check = || {
+            if token.is_some_and(|t| !t.is_current()) {
+                Err(Error::Superseded)
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
+
+        if !sample_rate.is_finite() || !(8000.0..=384000.0).contains(&sample_rate) {
+            return Err(Error::InvalidConfig);
+        }
+
+        let mut f = DualVcfStage::new(sample_rate as f32, 1.0);
+        f.set_params(
+            values[FilterCutoff as usize],
+            values[FilterResonance as usize],
+            values[FilterDrive as usize],
+            values[MoogBassComp as usize],
+            values[FilterMorph as usize],
+        );
+
+        let mut freq_grid = [0.0f64; 256];
+        let upper = (sample_rate * 0.49).min(20000.0);
+        log_frequencies(sample_rate, 20.0, upper, &mut freq_grid)?;
+
+        let mut impulse = Vec::with_capacity(4096);
+        let lengths = [4096usize, 8192, 16384, 32768, 65536, 131072];
+        for (idx, &target_len) in lengths.iter().enumerate() {
+            check()?;
+            let start = impulse.len();
+            for i in start..target_len {
+                if i % 1024 == 0 {
+                    check()?;
+                }
+                let x = if i == 0 { 0.0001f32 } else { 0.0f32 };
+                impulse.push(f.process_sample(x) as f64 / 0.0001);
+            }
+            if tail_converged(&impulse) || idx + 1 == lengths.len() {
+                break;
+            }
+        }
+
+        check()?;
+        let fft_size = impulse.len() * 2;
+        let mut analyzer = TransferAnalyzer::new(fft_size)?;
+        let mut points = vec![TransferPoint::default(); 256];
+        let meta: TransferMetadata = analyzer.analyze(
+            &impulse,
+            sample_rate,
+            &freq_grid,
+            -100.0,
+            &mut points,
+            token,
+        )?;
+
+        Ok(FilterTransfer {
+            sample_rate: meta.sample_rate,
+            hz: points.iter().map(|p| p.hz).collect(),
+            db: points.iter().map(|p| p.db).collect(),
+            phase: points.iter().map(|p| p.phase).collect(),
+            fft_size: meta.fft_size,
+            impulse_samples: meta.impulse_samples,
+            tail_converged: meta.tail_converged,
+            tail_relative_rms: meta.tail_relative_rms,
+            bin_hz: meta.bin_hz,
+        })
+    }
+}

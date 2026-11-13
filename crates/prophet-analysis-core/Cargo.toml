@@ -1,0 +1,11 @@
+[package]
+name = "prophet-analysis-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Workspace rlib bridge to prophet-analysis R2C spectrum/STFT and transfer analyzer (no cdylib)"
+
+[dependencies]
+realfft = "=3.5.0"
+rustfft = "=6.4.1"

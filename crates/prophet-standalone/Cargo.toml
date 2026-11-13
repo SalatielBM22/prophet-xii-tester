@@ -7,6 +7,7 @@ license.workspace=true
 prophet-dsp={path="../prophet-dsp"}
 prophet-control={path="../prophet-control"}
 prophet-params={path="../prophet-params"}
+prophet-analysis = { package = "prophet-analysis-core", path = "../prophet-analysis-core" }
 cpal="0.15.3"
 midir="0.10.3"
 rtrb="0.3.2"

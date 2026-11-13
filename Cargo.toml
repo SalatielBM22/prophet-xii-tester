@@ -8,6 +8,10 @@ members = [
     "crates/prophet-standalone",
     "crates/prophet-plugin",
     "crates/prophet-android",
+    "crates/prophet-analysis-core",
+]
+exclude = [
+    "crates/prophet-analysis",
 ]
 
 [workspace.package]

@@ -46,6 +46,11 @@ export interface FilterResponse {
   db: number[];
   phase: (number | null)[];
   legacy: boolean;
+  fftSize?: number;
+  impulseSamples?: number;
+  tailConverged?: boolean;
+  tailRelativeRms?: number;
+  binHz?: number;
 }
 
 export function decodeFilter(value: unknown, legacy: boolean, floorDb = -100): FilterResponse | null {
@@ -58,6 +63,33 @@ export function decodeFilter(value: unknown, legacy: boolean, floorDb = -100): F
   if (!phase.every(x => x === null || typeof x === 'number' && Number.isFinite(x))) return null;
   const sampleRate = legacy ? 48000 : f.sampleRate;
   if (typeof sampleRate !== 'number' || !Number.isFinite(sampleRate) || sampleRate < 8000 || sampleRate > 384000 || hz[hz.length - 1] > sampleRate / 2) return null;
+  let fftSize: number | undefined;
+  let impulseSamples: number | undefined;
+  let tailConverged: boolean | undefined;
+  let tailRelativeRms: number | undefined;
+  let binHz: number | undefined;
+  if (!legacy) {
+    if (f.fftSize !== undefined) {
+      if (typeof f.fftSize !== 'number' || !Number.isInteger(f.fftSize) || f.fftSize < 2048) return null;
+      fftSize = f.fftSize;
+    }
+    if (f.impulseSamples !== undefined) {
+      if (typeof f.impulseSamples !== 'number' || !Number.isInteger(f.impulseSamples) || f.impulseSamples < 1) return null;
+      impulseSamples = f.impulseSamples;
+    }
+    if (f.tailConverged !== undefined) {
+      if (typeof f.tailConverged !== 'boolean') return null;
+      tailConverged = f.tailConverged;
+    }
+    if (f.tailRelativeRms !== undefined) {
+      if (typeof f.tailRelativeRms !== 'number' || !Number.isFinite(f.tailRelativeRms) || f.tailRelativeRms < 0) return null;
+      tailRelativeRms = f.tailRelativeRms;
+    }
+    if (f.binHz !== undefined) {
+      if (typeof f.binHz !== 'number' || !Number.isFinite(f.binHz) || f.binHz <= 0) return null;
+      binHz = f.binHz;
+    }
+  }
   let last: number | null = null;
   const unwrapped = phase.map((p, i) => {
     if (p === null || db[i] < floorDb) { last = null; return null; }
@@ -66,7 +98,7 @@ export function decodeFilter(value: unknown, legacy: boolean, floorDb = -100): F
     last = result;
     return result;
   });
-  return { sampleRate, hz, db, phase: unwrapped, legacy };
+  return { sampleRate, hz, db, phase: unwrapped, legacy, fftSize, impulseSamples, tailConverged, tailRelativeRms, binHz };
 }
 
 export function filterPath(f: FilterResponse, phase: boolean): string {

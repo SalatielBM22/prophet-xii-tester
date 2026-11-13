@@ -64,4 +64,32 @@ describe('analysis pipeline', () => {
     expect(view.container.querySelector('path')!.getAttribute('d')).toContain('55.000');
     expect(view.getByText(/48000 Hz fixed legacy/)).toBeInTheDocument();
   });
+  it('displays native FFT transfer sample rate, resolution, and tail convergence without legacy re-unwrapping', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sampleRate: 96000,
+        hz: [20, 2000, 20000],
+        db: [0, -30, -120],
+        phase: [-0.1, -6.9, null],
+        fftSize: 16384,
+        impulseSamples: 8192,
+        tailConverged: true,
+        tailRelativeRms: 2e-5,
+        binHz: 96000 / 16384,
+      }),
+    })));
+    const view = render(<AnalysisPanel frame={frame(1)} values={values} connected token="" metadata={metadata} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180); });
+    expect(view.getByText(/96000 Hz · 16384-point FFT \(8192 samples\) · Δf 5\.859 Hz · tail converged/)).toBeInTheDocument();
+    const phasePath = view.container.querySelectorAll('path')[1].getAttribute('d')!;
+    expect(phasePath).toContain((75 - (-6.9) * 12).toFixed(3));
+  });
+  it('handles HTTP 409 superseded transfer responses without reporting a transport failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 409 })));
+    const view = render(<AnalysisPanel frame={frame(1)} values={values} connected token="" metadata={metadata} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180); });
+    expect(view.getByText('Measurement superseded by newer request')).toBeInTheDocument();
+  });
 });
