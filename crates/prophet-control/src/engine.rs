@@ -10,7 +10,47 @@ pub struct PreparedEngine {
     frames: u64,
 }
 pub use prophet_dsp::vector::{Patch, Point, Topology};
+#[derive(Clone, Copy, Debug)]
+pub struct VoiceState {
+    pub index: u8,
+    pub key: u8,
+    pub active: bool,
+    pub gate: bool,
+    pub releasing: bool,
+    pub detune_semis: f32,
+    pub pan: f32,
+}
 impl PreparedEngine {
+    /// Engine-side capabilities. Adapters intersect these with their own capabilities.
+    pub fn capabilities(&self) -> impl Iterator<Item = &'static str> {
+        [
+            "enginePortV1",
+            "glideEnabled",
+            "reverbState",
+            "selectIdleReverb",
+            "oscillatorPatch",
+            "noteScheduler",
+        ]
+        .into_iter()
+        .chain((self.patch().topology == Topology::Vector4).then_some("vectorXY"))
+    }
+    pub fn voices(&self) -> [VoiceState; 12] {
+        self.synth
+            .kernel
+            .allocator
+            .voices
+            .each_ref()
+            .map(|v| VoiceState {
+                index: v.voice_index as u8,
+                key: v.midi_note,
+                active: v.is_active(),
+                gate: v.gate,
+                releasing: v.amp_env.stage == prophet_dsp::env_cem3310::EnvStage::Release,
+                detune_semis: v.unison_detune_semis,
+                pan: v.unison_pan,
+            })
+    }
+
     /// Configure at prepare/recall, before starting voices.
     pub fn set_patch(&mut self, patch: Patch) -> Result<(), Status> {
         if !patch.valid() {

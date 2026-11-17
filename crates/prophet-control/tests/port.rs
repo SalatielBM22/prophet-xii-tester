@@ -82,3 +82,33 @@ fn invalid_block_is_atomic_and_glide_is_independent() {
         [Status::Invalid, Status::Unsupported]
     );
 }
+
+#[test]
+fn wire_snapshot_after_variable_blocks_and_duplicate_replay() {
+    for rate in [44100, 48000, 96000] {
+        let mut p = PreparedEngine::prepare(Prepare {
+            sample_rate: rate,
+            max_frames: 1024,
+            oversampling: 2,
+        })
+        .unwrap();
+        let mut total = 0u64;
+        for (seq, n) in [1, 16, 63, 257, 480, 1024].into_iter().enumerate() {
+            let mut on = midi(1, seq as u32 + 1, 0x90, 60, 100, 42);
+            on.offset = (n - 1) as u16;
+            let mut ack = [Ack::default(); 2];
+            let mut l = vec![0.; n];
+            let mut r = l.clone();
+            p.process(&mut l, &mut r, &[on, on], &mut ack).unwrap();
+            total += n as u64;
+            assert_eq!(ack[1].status, Status::Duplicate);
+            assert_eq!(p.rendered_frames(), total);
+            assert_eq!(p.voices().iter().filter(|v| v.gate).count(), 1);
+            assert!(l.iter().chain(&r).all(|v| v.is_finite()));
+        }
+        assert!(!p.capabilities().any(|v| v == "vectorXY"));
+        send(&mut p, &[midi(1, 10, 0x80, 60, 0, 42)]);
+        assert!(p.notes().next().is_none());
+        assert!(p.voices().iter().any(|v| v.releasing));
+    }
+}

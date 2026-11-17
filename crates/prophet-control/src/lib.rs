@@ -6,7 +6,7 @@ mod engine;
 mod ownership;
 #[path = "../../prophet-dsp-core/src/port.rs"]
 pub mod port;
-pub use engine::PreparedEngine;
+pub use engine::{PreparedEngine,VoiceState};
 pub use ownership::Note;
 pub use prophet_params::ipc_bridge;
 pub use prophet_params::presets;
