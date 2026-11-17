@@ -423,3 +423,7 @@ mod blep;
 
 #[path = "../../prophet-dsp-core/src/noise.rs"]
 mod noise;
+
+#[path = "../../prophet-dsp-core/src/vector.rs"]
+pub mod vector;
+mod extended;

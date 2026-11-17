@@ -9,7 +9,30 @@ pub struct PreparedEngine {
     serials: [u32; ORIGINS],
     frames: u64,
 }
+pub use prophet_dsp::vector::{Patch, Point, Topology};
 impl PreparedEngine {
+    /// Configure at prepare/recall, before starting voices.
+    pub fn set_patch(&mut self, patch: Patch) -> Result<(), Status> {
+        if !patch.valid() {
+            return Err(Status::Invalid);
+        }
+        if self
+            .synth
+            .kernel
+            .allocator
+            .voices
+            .iter()
+            .any(|v| v.is_active())
+        {
+            return Err(Status::Unsupported);
+        }
+        self.synth.kernel.voice_params.oscillator_patch = patch;
+        Ok(())
+    }
+    pub fn patch(&self) -> Patch {
+        self.synth.kernel.voice_params.oscillator_patch
+    }
+
     pub fn set_drive_makeup(&mut self, enabled: bool) {
         self.synth.kernel.voice_params.drive_makeup = enabled;
     }
@@ -88,7 +111,18 @@ impl PreparedEngine {
                 self.synth.sync_parameters();
                 Status::Applied
             }
-            Action::VectorXY { .. } => Status::Unsupported,
+            Action::VectorXY { x, y } => {
+                let patch = &mut self.synth.kernel.voice_params.oscillator_patch;
+                if patch.topology != Topology::Vector4 {
+                    return Status::Unsupported;
+                }
+                let pos = Point { x, y };
+                if !pos.valid() {
+                    return Status::Invalid;
+                }
+                patch.position = pos;
+                Status::Applied
+            }
         }
     }
     fn render(&mut self, l: &mut [f32], r: &mut [f32]) {

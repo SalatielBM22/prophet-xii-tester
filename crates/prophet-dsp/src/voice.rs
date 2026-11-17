@@ -103,6 +103,7 @@ impl Default for PolyModParams {
 /// Global Voice Parameters shared across all 12 voices during a processing block.
 #[derive(Clone, Copy, Debug)]
 pub struct SynthVoiceParams {
+    pub oscillator_patch: crate::vector::Patch,
     pub osc_a_semi: f32,
     pub osc_a_fine_cents: f32,
     pub osc_a_pw: f32,
@@ -155,6 +156,7 @@ pub struct SynthVoiceParams {
 impl Default for SynthVoiceParams {
     fn default() -> Self {
         Self {
+            oscillator_patch: Default::default(),
             osc_a_semi: 0.0,
             osc_a_fine_cents: 0.0,
             osc_a_pw: 0.5,
@@ -200,6 +202,8 @@ impl Default for SynthVoiceParams {
 #[repr(C, align(32))]
 #[derive(Clone, Debug)]
 pub struct ProphetVoice {
+    extras: crate::extended::ExtraOscillators,
+    trajectory: crate::vector::Trajectory,
     pub voice_index: usize,
     pub midi_note: u8,
     pub velocity: f32,
@@ -261,6 +265,8 @@ impl ProphetVoice {
         let (pan_r, pan_l) = (pan * core::f32::consts::FRAC_PI_2).sin_cos();
 
         Self {
+            extras: Default::default(),
+            trajectory: Default::default(),
             voice_index,
             midi_note: 60,
             velocity: 0.0,
@@ -343,6 +349,7 @@ impl ProphetVoice {
         self.midi_note = midi_note;
         self.velocity = velocity.clamp(0.0, 1.0);
         self.gate = true;
+        self.trajectory.restart();
         self.note_age = age;
         self.target_note_pitch = midi_note as f32;
 
@@ -371,6 +378,7 @@ impl ProphetVoice {
     #[inline(always)]
     pub fn trigger_note_off(&mut self) {
         self.gate = false;
+        self.trajectory.release();
         self.filter_env.note_off();
         self.amp_env.note_off();
     }
@@ -564,6 +572,12 @@ impl ProphetVoice {
             );
         }
 
+        let patch = &params.oscillator_patch;
+        let weights = if patch.topology == crate::vector::Topology::Vector4 {
+            self.trajectory.advance(patch, self.base_sample_rate)
+        } else {
+            [0.; 4]
+        };
         let has_noise = params.mix_noise > 1.0e-5;
         let filtered_sample = self.oversampler.process_voice_sample(|| {
             // Audio-rate Poly-Mod bus combining Filter EG and Osc B
@@ -587,6 +601,7 @@ impl ProphetVoice {
             };
 
             // 3. Generate CEM3340 Dual VCO with Exact Sub-Sample Hard Sync
+            let previous_phase_b = vco_ref.phase_b;
             let (out_a, out_b) = vco_ref.process_sample(
                 freq_a_hz,
                 freq_b_hz,
@@ -604,7 +619,19 @@ impl ProphetVoice {
             } else {
                 0.0
             };
-            let mixer_out = out_a * params.mix_osc_a + out_b * params.mix_osc_b + noise_sig;
+            let tonal = if patch.topology == crate::vector::Topology::Classic2 {
+                out_a * params.mix_osc_a + out_b * params.mix_osc_b
+            } else {
+                self.extras.mix(
+                    patch,
+                    [out_a, out_b],
+                    [params.mix_osc_a, params.mix_osc_b],
+                    vco_ref.phase_b < previous_phase_b,
+                    freq_a_hz * vco_ref.inv_sample_rate,
+                    weights,
+                )
+            };
+            let mixer_out = tonal + noise_sig;
 
             // 5. Instantaneous ZDF Filter Cutoff Modulation (V/Oct exponential)
             if cutoff_needs_substep_update {
@@ -623,7 +650,9 @@ impl ProphetVoice {
         });
 
         let mut voice_out = filtered_sample * vca_gain;
-        if params.drive_makeup {voice_out *= params.filter_drive;}
+        if params.drive_makeup {
+            voice_out *= params.filter_drive;
+        }
 
         // Apply 1.5 ms anti-click crossfade if this voice card was stolen from an active note
         if self.steal_fade_remaining > 0 {
