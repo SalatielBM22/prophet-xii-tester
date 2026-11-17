@@ -726,6 +726,11 @@ impl SolarisCloudburstReverb {
         in_r: f32,
         params: &SolarisReverbParams,
     ) -> (f32, f32) {
+        self.process_profile::<false>(in_l,in_r,params)
+    }
+
+    #[inline]
+    pub(super) fn process_profile<const DIFFUSE:bool>(&mut self,in_l:f32,in_r:f32,params:&SolarisReverbParams)->(f32,f32) {
         let step = 1.0 / (0.005 * self.sample_rate);
         let target = if params.enabled { 1.0 } else { 0.0 };
         self.enable_gain += (target - self.enable_gain).clamp(-step, step);
@@ -751,7 +756,7 @@ impl SolarisCloudburstReverb {
         let coefficient_key = [params.high_cut_hz, params.low_cut_hz, params.decay_sec];
         if self.cached_params != Some(coefficient_key) {
             let sr = self.sample_rate;
-            let hc = params.high_cut_hz.clamp(800.0, 18000.0);
+            let hc = params.high_cut_hz.clamp(800.0, 18000.0_f32.min(0.48 * sr));
             let lc = params.low_cut_hz.clamp(20.0, 1000.0);
             let decay = params.decay_sec.clamp(0.2, 60.0);
 
@@ -863,6 +868,11 @@ impl SolarisCloudburstReverb {
             // 3-phase Solina stereo spread (weights sum to 1.0 across L+R)
             let sum_l = 0.80 * lane0 + 0.50 * lane1 + 0.20 * lane2;
             let sum_r = 0.20 * lane0 + 0.50 * lane1 + 0.80 * lane2;
+            let (sum_l,sum_r) = if DIFFUSE {
+                // Opposite lane differences widen only the wet signal. The mid sum is conserved.
+                let side=0.20*(lane0-lane2);
+                (sum_l+side,sum_r-side)
+            } else { (sum_l,sum_r) };
             let gain = 0.22 * params.ensemble_blend;
             ensemble_l = sum_l * gain;
             ensemble_r = sum_r * gain;
@@ -949,7 +959,7 @@ impl SolarisCloudburstReverb {
             let shim_07 = self.shimmer_fifth.process(shimmer_in, 1.498_307_1);
             let fifth = params.shimmer_fifth_blend.clamp(0.0, 1.0);
             let u_shifted = shim_12 * (1.0 - fifth) + shim_07 * fifth;
-            let g_fb = shimmer_amount * 0.28;
+            let g_fb = shimmer_amount * if DIFFUSE { 0.14 } else { 0.28 };
             feedback_vec[0] = (1.0 - g_fb) * mixed[0] + g_fb * u_shifted;
             shimmer_wet_tap = u_shifted * (0.22 * shimmer_amount);
         } else if self.shimmer_was_active {
@@ -1009,9 +1019,11 @@ impl SolarisCloudburstReverb {
         let raw_tank_l = 0.45 * (fdn_reads[0] - fdn_reads[2] + fdn_reads[4] - fdn_reads[6])
             + ensemble_l
             + shimmer_wet_tap;
+        // Give shifted energy a mono-compatible component in the candidate.
+        let right_shimmer = if DIFFUSE {0.35 * shimmer_wet_tap} else {-shimmer_wet_tap};
         let raw_tank_r = 0.45 * (fdn_reads[1] - fdn_reads[3] + fdn_reads[5] - fdn_reads[7])
             + ensemble_r
-            - shimmer_wet_tap;
+            + right_shimmer;
 
         // Stage 3b: Continuous 5-Vowel Formant Filter on the stereo wet readout (never collapsing tank RT60)
         let (vow_l, vow_r) = if params.vowel_mix > 1.0e-4 {

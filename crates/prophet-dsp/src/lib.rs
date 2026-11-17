@@ -14,7 +14,8 @@ pub mod voice;
 
 use env_cem3310::ProphetGlobalLfo;
 use fx::juno_chorus::Juno106BbdChorus;
-use fx::solaris_reverb::{SolarisCloudburstReverb, SolarisReverbParams};
+use fx::reverb::{ReverbPort, ReverbSlot};
+use fx::solaris_reverb::SolarisReverbParams;
 use oversample::OversampleFactor;
 use voice::{ProphetVoiceAllocator, SynthVoiceParams, NUM_VOICES};
 
@@ -122,7 +123,7 @@ pub struct ProphetXiiKernel {
     pub allocator: ProphetVoiceAllocator,
     pub global_lfo: ProphetGlobalLfo,
     pub chorus: Juno106BbdChorus,
-    pub reverb: SolarisCloudburstReverb,
+    pub reverb: ReverbSlot,
     pub voice_params: SynthVoiceParams,
     pub reverb_params: SolarisReverbParams,
     pub cutoff_smoother: OnePoleSmoother,
@@ -169,7 +170,7 @@ impl ProphetXiiKernel {
             allocator: ProphetVoiceAllocator::new(sr),
             global_lfo: ProphetGlobalLfo::new(sr),
             chorus: Juno106BbdChorus::new(sr),
-            reverb: SolarisCloudburstReverb::new(sr),
+            reverb: ReverbSlot::new(sr),
             voice_params,
             reverb_params: SolarisReverbParams::default(),
             cutoff_smoother: OnePoleSmoother::new(voice_params.filter_cutoff_hz, 4.0, sr),
