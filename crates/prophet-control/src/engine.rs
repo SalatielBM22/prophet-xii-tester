@@ -4,7 +4,7 @@ use prophet_dsp::{KernelTelemetrySnapshot, MAX_BLOCK_SIZE};
 use prophet_params::{ParamId, PARAM_SPECS};
 
 pub struct PreparedEngine {
-    pub(crate) synth: ProphetXiiPlugin,
+    pub(crate) synth: Box<ProphetXiiPlugin>,
     config: Prepare,
     serials: [u32; ORIGINS],
     frames: u64,
@@ -222,7 +222,7 @@ impl EnginePort for PreparedEngine {
         if !config.valid() {
             return Err(PortError::Configuration);
         }
-        let mut synth = ProphetXiiPlugin::new(config.sample_rate as f32);
+        let mut synth = Box::new(ProphetXiiPlugin::new(config.sample_rate as f32));
         synth
             .ipc
             .params

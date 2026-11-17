@@ -324,3 +324,4 @@ pub struct MidiEvent {
 
 #[path = "../../prophet-dsp-core/src/music.rs"]
 pub mod music;
+pub mod state;
