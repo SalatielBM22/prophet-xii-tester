@@ -241,10 +241,10 @@ impl AtomicParamBank {
         }
     }
     pub fn learnable_cc(cc: usize) -> bool {
-        cc < 128 && !matches!(cc, 64 | 120 | 123)
+        cc < 128 && !matches!(cc, 64 | 66 | 120 | 123)
     }
     pub fn begin_learn(&self, id: usize) -> bool {
-        if id >= NUM_PARAMS {
+        if id == ParamId::OversamplingMode as usize || id >= NUM_PARAMS {
             return false;
         }
         self.midi_learn_target_param
@@ -275,7 +275,7 @@ impl AtomicParamBank {
         true
     }
     pub fn remap(&self, cc: usize, id: usize) -> bool {
-        if !Self::learnable_cc(cc) || id >= NUM_PARAMS {
+        if !Self::learnable_cc(cc) || id == ParamId::OversamplingMode as usize || id >= NUM_PARAMS {
             return false;
         }
         self.unlearn(id);

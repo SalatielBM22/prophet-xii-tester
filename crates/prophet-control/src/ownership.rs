@@ -10,6 +10,9 @@ pub struct Note {
     pub pressed: bool,
     pub sostenuto: bool,
     generation: u64,
+    bend: i16,
+    pressure: u8,
+    timbre: Option<u8>,
 }
 #[derive(Default, Copy, Clone)]
 struct Pedals {
@@ -33,6 +36,31 @@ impl ProphetXiiPlugin {
         self.ownership.notes.iter().flatten()
     }
 
+    // The allocator can grow a stack or return to an older sustained key.
+    // Expressions belong to its MIDI note identity, independent of voice index.
+    pub(crate) fn refresh_stack(&mut self) {
+        if !self.kernel.allocator.unison_enabled {
+            return;
+        }
+        let first = &self.kernel.allocator.voices[0];
+        if !first.gate {
+            return;
+        }
+        let key = first.midi_note;
+        let selected = self
+            .held_notes()
+            .filter(|n| n.key == key)
+            .max_by_key(|n| n.generation)
+            .copied();
+        if let Some(note) = selected {
+            for v in &mut self.kernel.allocator.voices {
+                if v.gate && v.midi_note == key {
+                    note.apply_expression(v);
+                    v.note_age = note.generation;
+                }
+            }
+        }
+    }
     fn drop_note(&mut self, slot: usize) {
         let Some(note) = self.ownership.notes[slot].take() else {
             return;
@@ -57,6 +85,7 @@ impl ProphetXiiPlugin {
                 self.drop_note(i);
             }
         }
+        self.refresh_stack();
         for (ch, pedals) in self.ownership.pedals[origin as usize]
             .iter_mut()
             .enumerate()
@@ -107,6 +136,7 @@ impl ProphetXiiPlugin {
                     pressed: true,
                     sostenuto: false,
                     generation: self.kernel.allocator.event_counter,
+                    ..Default::default()
                 });
             }
             0x80 | 0x90 => {
@@ -154,28 +184,21 @@ impl ProphetXiiPlugin {
             0xb0 | 0xd0 | 0xe0 => {
                 if ch > 0 && (status & 0xf0 != 0xb0 || d1 == 74) {
                     let n = self
-                        .held_notes()
+                        .ownership
+                        .notes
+                        .iter_mut()
+                        .flatten()
                         .filter(|n| n.origin == origin && n.channel == ch)
-                        .max_by_key(|n| n.generation)
-                        .copied();
+                        .max_by_key(|n| n.generation);
                     if let Some(n) = n {
+                        match status & 0xf0 {
+                            0xb0 => n.timbre = Some(d2),
+                            0xd0 => n.pressure = d1,
+                            _ => n.bend = i16::from(d2) * 128 + i16::from(d1) - 8192,
+                        }
                         for v in &mut self.kernel.allocator.voices {
-                            if v.gate
-                                && v.midi_note == n.key
-                                && (v.note_age == n.generation
-                                    || self.kernel.allocator.unison_enabled)
-                            {
-                                match status & 0xf0 {
-                                    0xb0 => v.mpe_timbre = f32::from(d2) / 127.0 - 0.5,
-                                    0xd0 => v.mpe_pressure = f32::from(d1) / 127.0,
-                                    _ => {
-                                        v.mpe_pitch_bend_semis =
-                                            (f32::from(u16::from(d2) * 128 + u16::from(d1))
-                                                - 8192.0)
-                                                / 8192.0
-                                                * 48.0
-                                    }
-                                }
+                            if v.gate && v.note_age == n.generation && v.midi_note == n.key {
+                                n.apply_expression(v);
                             }
                         }
                     }
@@ -185,6 +208,15 @@ impl ProphetXiiPlugin {
             }
             _ => return Status::Unsupported,
         }
+        self.refresh_stack();
         Status::Applied
+    }
+}
+
+impl Note {
+    fn apply_expression(&self, v: &mut prophet_dsp::voice::ProphetVoice) {
+        v.mpe_timbre = self.timbre.map_or(0., |t| f32::from(t) / 127. - 0.5);
+        v.mpe_pressure = f32::from(self.pressure) / 127.;
+        v.mpe_pitch_bend_semis = f32::from(self.bend) * (48. / 8192.);
     }
 }
