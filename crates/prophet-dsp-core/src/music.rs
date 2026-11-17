@@ -82,7 +82,7 @@ pub struct Arpeggiator {
     pressed: [bool; 12],
     n: usize,
     pub order: Order,
-    pub latch: bool,
+    latch: bool,
     pub seed: u32,
     octaves: u8,
 }
@@ -100,6 +100,20 @@ impl Default for Arpeggiator {
     }
 }
 impl Arpeggiator {
+    pub fn set_latch(&mut self, enabled: bool) {
+        self.latch = enabled;
+        if !enabled {
+            let mut kept = 0;
+            for i in 0..self.n {
+                if self.pressed[i] {
+                    self.keys[kept] = self.keys[i];
+                    self.pressed[kept] = true;
+                    kept += 1;
+                }
+            }
+            self.n = kept;
+        }
+    }
     pub fn set_octaves(&mut self, n: u8) -> bool {
         if !(1..=4).contains(&n) {
             return false;
@@ -210,6 +224,8 @@ pub enum MusicError {
 pub struct NoteScheduler {
     rate: u32,
     tempo_milli: u32,
+    pending_tempo: Option<u32>,
+    anchor: i64,
     swing: u8,
     frame: u64,
     step: u64,
@@ -230,6 +246,8 @@ impl NoteScheduler {
         Ok(Self {
             rate,
             tempo_milli,
+            pending_tempo: None,
+            anchor: 0,
             swing,
             frame: 0,
             step: 0,
@@ -242,13 +260,39 @@ impl NoteScheduler {
     }
     fn boundary(&self, step: u64) -> u64 {
         let ticks = 100 * u128::from(step) + u128::from(step % 2) * u128::from(self.swing);
-        (ticks * u128::from(self.rate) * 150 / u128::from(self.tempo_milli)) as u64
+        let raw = (ticks * u128::from(self.rate) * 150 / u128::from(self.tempo_milli)) as i64;
+        (raw + self.anchor).max(0) as u64
+    }
+    /// Tempo changes preserve the onset already scheduled for the next sixteenth.
+    pub fn queue_tempo(&mut self, milli_bpm: u32) -> Result<(), MusicError> {
+        if !(20000..=400000).contains(&milli_bpm) {
+            return Err(MusicError::Configuration);
+        }
+        self.pending_tempo = Some(milli_bpm);
+        Ok(())
+    }
+    /// Host loop or seek to a musical grid boundary at the specified frame.
+    pub fn start_grid(&mut self, step: u32, frame: u64) -> Result<(), MusicError> {
+        if frame > 1 << 52 {
+            return Err(MusicError::Position);
+        }
+        self.anchor = 0;
+        self.step = u64::from(step);
+        self.anchor = frame as i64 - self.boundary(self.step) as i64;
+        self.frame = frame;
+        self.next = frame;
+        self.pulse = 0;
+        self.release = None;
+        self.flush = true;
+        self.playing = true;
+        Ok(())
     }
     /// Seek/loop at a host split point. Mid-step seeks resume on the next grid onset.
     pub fn seek(&mut self, frame: u64) -> Result<(), MusicError> {
         if frame > 1 << 52 {
             return Err(MusicError::Position);
         }
+        self.anchor = 0;
         let straight = (u128::from(frame) * u128::from(self.tempo_milli)
             / (15000 * u128::from(self.rate))) as u64;
         self.step = straight.saturating_sub(1);
@@ -306,6 +350,13 @@ impl NoteScheduler {
                 emit(at, Trigger::Release)?;
                 t.release = None;
                 continue;
+            }
+            if t.pulse == 0 {
+                if let Some(tempo) = t.pending_tempo.take() {
+                    t.tempo_milli = tempo;
+                    t.anchor = 0;
+                    t.anchor = at as i64 - t.boundary(t.step) as i64;
+                }
             }
             let idx = (t.step % u64::from(p.len)) as usize;
             let step = p.steps[idx];

@@ -130,3 +130,28 @@ fn arp_order_and_seed_and_capacity_retry() {
     assert_eq!(e.notes().count(), 1);
     assert_eq!(e.notes().next().unwrap().origin, 1);
 }
+
+#[test]
+fn loop_releases_previous_origin_and_tempo_change_preserves_downbeat() {
+    let mut t = NoteScheduler::new(8000, 120000, 0).unwrap();
+    let mut p = Pattern::default();
+    for (i, s) in p.steps.iter_mut().enumerate() {
+        s.kind = Kind::Note;
+        s.key = 40 + i as u8;
+    }
+    let mut buf = [MusicEvent::default(); 32];
+    t.start_grid(2, 500).unwrap();
+    let n = t.block(500, &p, None, &mut buf).unwrap();
+    assert!(matches!(buf[n - 1].trigger, Trigger::Note { key: 42, .. }));
+    t.queue_tempo(240000).unwrap();
+    let n = t.block(1000, &p, None, &mut buf).unwrap();
+    assert!(buf[..n]
+        .iter()
+        .any(|e| e.offset == 500 && matches!(e.trigger, Trigger::Note { key: 43, .. })));
+    let n = t.block(1, &p, None, &mut buf).unwrap();
+    assert!(matches!(buf[n - 1].trigger, Trigger::Note { key: 44, .. }));
+    t.start_grid(2, 2001).unwrap();
+    let n = t.block(1, &p, None, &mut buf).unwrap();
+    assert_eq!(buf[0].trigger, Trigger::Release);
+    assert!(matches!(buf[n - 1].trigger, Trigger::Note { key: 42, .. }));
+}
