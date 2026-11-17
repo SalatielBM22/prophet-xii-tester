@@ -143,6 +143,8 @@ pub const NUM_PARAMS: usize = 83;
 pub struct AtomicParamBank {
     pub values: [AtomicF32; NUM_PARAMS],
     pub revision: AtomicU64,
+    // 2 follows RC1 time automation until a host explicitly sets ID 83.
+    glide_switch: AtomicU32,
     pub reverb_enabled: AtomicBool,
     pub reverb_tail: AtomicU32,
     /// Individual per-voice calibration trimpots (`12` voices x `4` offsets)
@@ -188,6 +190,7 @@ impl AtomicParamBank {
         let bank = Self {
             values,
             revision: AtomicU64::new(0),
+            glide_switch: AtomicU32::new(2),
             reverb_enabled: AtomicBool::new(true),
             reverb_tail: AtomicU32::new(0),
             voice_vco_a_cents,
@@ -221,6 +224,22 @@ impl AtomicParamBank {
     }
 
     /// MIDI CC64 and channel-mode CC120/123 are reserved by the engine.
+    pub fn glide_enabled(&self) -> bool {
+        match self.glide_switch.load(Ordering::Relaxed) {
+            0 => false,
+            1 => true,
+            _ => self.get(ParamId::GlideTime) > 0.0005,
+        }
+    }
+    pub fn set_glide_enabled(&self, enabled: bool) {
+        if self
+            .glide_switch
+            .swap(u32::from(enabled), Ordering::Relaxed)
+            != u32::from(enabled)
+        {
+            self.revision.fetch_add(1, Ordering::Relaxed);
+        }
+    }
     pub fn learnable_cc(cc: usize) -> bool {
         cc < 128 && !matches!(cc, 64 | 120 | 123)
     }
@@ -282,6 +301,7 @@ impl AtomicParamBank {
         chorus_wet: f32,
         oversample_idx: f32,
     ) {
+        self.glide_switch.store(2, Ordering::Relaxed);
         self.set(ParamId::OscASemi, vp.osc_a_semi);
         self.set(ParamId::OscAFine, vp.osc_a_fine_cents);
         self.set(ParamId::OscAPw, vp.osc_a_pw);
@@ -468,7 +488,11 @@ impl AtomicParamBank {
         vp.amp_release = self.get(ParamId::AmpRelease);
 
         vp.vintage_amount = self.get(ParamId::VintageDispersion);
-        vp.glide_time_sec = self.get(ParamId::GlideTime);
+        vp.glide_time_sec = if self.glide_enabled() {
+            self.get(ParamId::GlideTime)
+        } else {
+            0.0
+        };
         vp.glide_mode = if self.get(ParamId::GlideMode) >= 0.5 {
             GlideMode::ConstantTime
         } else {

@@ -265,9 +265,9 @@ impl ProphetXiiKernel {
                 let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
                 let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
                 let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
-                let (rev_l, rev_r) = self
-                    .reverb
-                    .process_stereo(chor_l, chor_r, &self.reverb_params);
+                let (rev_l, rev_r) =
+                    self.reverb
+                        .process_stereo(chor_l, chor_r, &self.reverb_params);
 
                 let final_l = (rev_l * gain).clamp(-1.0, 1.0);
                 let final_r = (rev_r * gain).clamp(-1.0, 1.0);
@@ -310,9 +310,9 @@ impl ProphetXiiKernel {
                 let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
                 let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
                 let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
-                let (rev_l, rev_r) = self
-                    .reverb
-                    .process_stereo(chor_l, chor_r, &self.reverb_params);
+                let (rev_l, rev_r) =
+                    self.reverb
+                        .process_stereo(chor_l, chor_r, &self.reverb_params);
 
                 let gain = self.gain_smoother.next();
                 let final_l = (rev_l * gain).clamp(-1.0, 1.0);

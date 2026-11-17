@@ -2,6 +2,12 @@
 // PROPHET-XII Plugin Wrapper (`prophet-plugin`) — MIDI/MPE Processor, Preset Manager & IPC Integration
 // Reference: NIH-plug VST3/CLAP architecture (https://github.com/robbert-vdh/nih-plug)
 
+mod engine;
+mod ownership;
+#[path = "../../prophet-dsp-core/src/port.rs"]
+pub mod port;
+pub use engine::PreparedEngine;
+pub use ownership::Note;
 pub use prophet_params::ipc_bridge;
 pub use prophet_params::presets;
 
@@ -17,10 +23,7 @@ pub struct ProphetXiiPlugin {
     pub ipc: WebViewIpcBridge,
     pub presets: [ProphetPreset; 10],
     pub current_preset_idx: usize,
-    /// MPE channel->voice mapping (`16` MIDI channels)
-    mpe_channel_voice: [Option<usize>; 16],
-    sustain: [bool; 16],
-    pending_off: [[bool; 128]; 16],
+    ownership: ownership::Ownership,
 }
 
 impl Default for ProphetXiiPlugin {
@@ -37,9 +40,7 @@ impl ProphetXiiPlugin {
             ipc: WebViewIpcBridge::default(),
             presets,
             current_preset_idx: 0,
-            mpe_channel_voice: [None; 16],
-            sustain: [false; 16],
-            pending_off: [[false; 128]; 16],
+            ownership: Default::default(),
         };
         plugin.load_preset(0);
         plugin
@@ -57,9 +58,6 @@ impl ProphetXiiPlugin {
             p.chorus_wet,
             2.0,
         );
-        self.kernel.allocator.unison_enabled = p.unison_enabled;
-        self.kernel.allocator.unison_voices = p.unison_voices;
-        self.kernel.allocator.unison_detune_cents = p.unison_detune_cents;
         self.ipc.params.set(
             ParamId::UnisonEnabled,
             if p.unison_enabled { 1.0 } else { 0.0 },
@@ -76,76 +74,21 @@ impl ProphetXiiPlugin {
 
     /// Processes incoming raw 3-byte MIDI / MPE messages on the Audio Thread with zero allocations.
     pub fn handle_midi_message(&mut self, status: u8, data1: u8, data2: u8) {
-        if data1 > 127 || data2 > 127 {
-            return;
-        }
-        let cmd = status & 0xF0;
-        let ch = (status & 0x0F) as usize;
+        self.midi_owned(0, status, data1, data2, u32::from(data1));
+    }
 
-        match cmd {
-            0x90 if data2 > 0 => {
-                self.pending_off[ch][data1 as usize] = false;
-                let vel = (data2 as f32) / 127.0;
-                self.kernel
-                    .allocator
-                    .note_on(data1, vel, &self.kernel.voice_params);
-                // Record MPE member channel assignment (channels 1..15)
-                for (v_idx, v) in self.kernel.allocator.voices.iter().enumerate() {
-                    if v.midi_note == data1 && v.gate {
-                        self.mpe_channel_voice[ch] = Some(v_idx);
-                        break;
-                    }
-                }
-            }
-            0x80 | 0x90 => {
-                if self.sustain[ch] {
-                    self.pending_off[ch][data1 as usize] = true;
-                    return;
-                }
-                self.kernel
-                    .allocator
-                    .note_off(data1, &self.kernel.voice_params);
-                self.mpe_channel_voice[ch] = None;
-            }
-            0xB0 => {
-                let cc = (data1 & 0x7F) as usize;
-                let norm_val = (data2 as f32) / 127.0;
-
-                if cc == 64 {
-                    self.sustain[ch] = data2 >= 64;
-                    if !self.sustain[ch] {
-                        for n in 0..128 {
-                            if self.pending_off[ch][n] {
-                                self.kernel
-                                    .allocator
-                                    .note_off(n as u8, &self.kernel.voice_params);
-                                self.pending_off[ch][n] = false;
-                            }
-                        }
-                    }
-                    return;
-                }
-                if cc == 120 || cc == 123 {
-                    self.panic();
-                    return;
-                }
-                if self.ipc.params.midi_learn_active.load(Ordering::Relaxed)
-                    && !(cc == 74 && ch > 0)
-                {
+    fn global_controller(&mut self, status: u8, data1: u8, data2: u8) {
+        match status & 0xf0 {
+            0xb0 => {
+                let cc = usize::from(data1);
+                let norm_val = f32::from(data2) / 127.0;
+                if self.ipc.params.midi_learn_active.load(Ordering::Relaxed) {
                     let target = self
                         .ipc
                         .params
                         .midi_learn_target_param
                         .load(Ordering::Relaxed);
                     self.ipc.params.remap(cc, target as usize);
-                }
-
-                // MPE CC 74 (Slide / Timbre) per-voice routing on member channels 1..15
-                if cc == 74 && ch > 0 {
-                    if let Some(v_idx) = self.mpe_channel_voice[ch] {
-                        self.kernel.allocator.voices[v_idx].mpe_timbre = norm_val - 0.5;
-                        return;
-                    }
                 }
 
                 let mapped_param = self.ipc.params.cc_map[cc].load(Ordering::Relaxed);
@@ -170,26 +113,12 @@ impl ProphetXiiPlugin {
             0xD0 => {
                 // Channel Pressure / Aftertouch (Global on Ch 0, Per-Voice MPE on Ch 1..15)
                 let pressure = (data1 as f32) / 127.0;
-                if ch > 0 {
-                    if let Some(v_idx) = self.mpe_channel_voice[ch] {
-                        self.kernel.allocator.voices[v_idx].mpe_pressure = pressure;
-                        return;
-                    }
-                }
                 self.kernel.voice_params.aftertouch = pressure;
             }
             0xE0 => {
                 // 14-bit Pitch Bend
                 let raw14 = ((data2 as u16) << 7) | (data1 as u16);
                 let norm_bipolar = ((raw14 as f32) - 8192.0) / 8192.0;
-                if ch > 0 {
-                    if let Some(v_idx) = self.mpe_channel_voice[ch] {
-                        // MPE +/- 48 semitone per-note bend
-                        self.kernel.allocator.voices[v_idx].mpe_pitch_bend_semis =
-                            norm_bipolar * 48.0;
-                        return;
-                    }
-                }
                 // Master channel +/- 7 semitone bend
                 self.kernel.voice_params.pitch_bend_semis = norm_bipolar * 7.0;
                 self.ipc.params.set(ParamId::PitchBend, norm_bipolar * 7.0);
@@ -207,36 +136,55 @@ impl ProphetXiiPlugin {
                     velocity,
                     channel,
                 } => {
-                    self.kernel
-                        .allocator
-                        .note_on(note, velocity, &self.kernel.voice_params);
-                    let ch = (channel as usize) & 0x0F;
-                    for (v_idx, v) in self.kernel.allocator.voices.iter().enumerate() {
-                        if v.midi_note == note && v.gate {
-                            self.mpe_channel_voice[ch] = Some(v_idx);
-                            break;
-                        }
+                    if velocity.is_finite() && (0.0..=1.0).contains(&velocity) && channel < 16 {
+                        self.midi_owned(
+                            1,
+                            0x90 | channel,
+                            note,
+                            (velocity * 127.0).round() as u8,
+                            u32::from(note),
+                        );
                     }
                 }
                 IpcUiEvent::NoteOff { note, channel } => {
-                    self.kernel
-                        .allocator
-                        .note_off(note, &self.kernel.voice_params);
-                    self.mpe_channel_voice[(channel as usize) & 0x0F] = None;
+                    if channel < 16 {
+                        self.midi_owned(1, 0x80 | channel, note, 0, u32::from(note));
+                    }
                 }
                 IpcUiEvent::MpePitchBend { channel, semitones } => {
-                    if let Some(v_idx) = self.mpe_channel_voice[(channel as usize) & 0x0F] {
-                        self.kernel.allocator.voices[v_idx].mpe_pitch_bend_semis = semitones;
+                    if channel < 16 && semitones.is_finite() {
+                        let bend = ((semitones / 48.0 + 1.0) * 8192.0)
+                            .round()
+                            .clamp(0.0, 16383.0) as u16;
+                        self.midi_owned(
+                            1,
+                            0xe0 | channel,
+                            (bend & 127) as u8,
+                            (bend >> 7) as u8,
+                            0,
+                        );
                     }
                 }
                 IpcUiEvent::MpePressure { channel, pressure } => {
-                    if let Some(v_idx) = self.mpe_channel_voice[(channel as usize) & 0x0F] {
-                        self.kernel.allocator.voices[v_idx].mpe_pressure = pressure;
+                    if channel < 16 && pressure.is_finite() {
+                        self.midi_owned(
+                            1,
+                            0xd0 | channel,
+                            (pressure.clamp(0., 1.) * 127.).round() as u8,
+                            0,
+                            0,
+                        );
                     }
                 }
                 IpcUiEvent::MpeTimbre { channel, timbre } => {
-                    if let Some(v_idx) = self.mpe_channel_voice[(channel as usize) & 0x0F] {
-                        self.kernel.allocator.voices[v_idx].mpe_timbre = timbre;
+                    if channel < 16 && timbre.is_finite() {
+                        self.midi_owned(
+                            1,
+                            0xb0 | channel,
+                            74,
+                            ((timbre + 0.5).clamp(0., 1.) * 127.).round() as u8,
+                            0,
+                        );
                     }
                 }
                 IpcUiEvent::SelectPreset { index } => {
@@ -248,10 +196,11 @@ impl ProphetXiiPlugin {
                     detune,
                     spread,
                 } => {
-                    self.kernel.allocator.unison_enabled = enabled;
-                    self.kernel.allocator.unison_voices = voices;
-                    self.kernel.allocator.unison_detune_cents = detune;
-                    self.kernel.allocator.unison_stereo_spread = spread;
+                    let bank = &self.ipc.params;
+                    bank.set(ParamId::UnisonEnabled, f32::from(enabled));
+                    bank.set(ParamId::UnisonVoices, voices as f32);
+                    bank.set(ParamId::UnisonDetune, detune);
+                    bank.set(ParamId::UnisonSpread, spread);
                 }
             }
         }
@@ -316,13 +265,13 @@ impl ProphetXiiPlugin {
         let a = &mut self.kernel.allocator;
         let unison = b.get(ParamId::UnisonEnabled) >= 0.5;
         let voices = b.get(ParamId::UnisonVoices).round() as usize;
-        if a.unison_enabled != unison || a.unison_voices != voices {
-            a.all_notes_off();
-        }
-        a.unison_enabled = unison;
-        a.unison_voices = voices;
-        a.unison_detune_cents = b.get(ParamId::UnisonDetune);
-        a.unison_stereo_spread = b.get(ParamId::UnisonSpread);
+        a.configure_unison(
+            unison,
+            voices,
+            b.get(ParamId::UnisonDetune),
+            b.get(ParamId::UnisonSpread),
+            &self.kernel.voice_params,
+        );
         a.note_priority = match b.get(ParamId::NotePriority).round() as u32 {
             1 => prophet_dsp::voice::NotePriority::Low,
             2 => prophet_dsp::voice::NotePriority::High,
@@ -330,9 +279,7 @@ impl ProphetXiiPlugin {
         };
     }
     pub fn panic(&mut self) {
-        self.sustain = [false; 16];
-        self.pending_off = [[false; 128]; 16];
-        self.mpe_channel_voice = [None; 16];
+        self.ownership = Default::default();
         self.kernel.allocator.all_notes_off();
     }
     /// Events must be sorted, offsets are relative to this block; out-of-range events are rejected.

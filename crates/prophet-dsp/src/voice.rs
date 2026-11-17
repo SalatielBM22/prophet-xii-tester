@@ -210,6 +210,8 @@ pub struct ProphetVoice {
     /// Unison detune offset in semitones & stereo pan override
     pub unison_detune_semis: f32,
     pub unison_pan: f32,
+    unison_target: [f32; 2],
+    unison_ramp: u32,
 
     /// Per-note MPE expressions
     pub mpe_pitch_bend_semis: f32,
@@ -266,6 +268,8 @@ impl ProphetVoice {
             glide_rate_semis_per_sample: 100.0,
             unison_detune_semis: 0.0,
             unison_pan: trimpots.pan,
+            unison_target: [0.0, trimpots.pan],
+            unison_ramp: 0,
             mpe_pitch_bend_semis: 0.0,
             mpe_pressure: 0.0,
             mpe_timbre: 0.0,
@@ -330,6 +334,9 @@ impl ProphetVoice {
             self.steal_held_sample = self.last_mono;
             let _ = last_output_sample;
         }
+        self.mpe_pitch_bend_semis = 0.0;
+        self.mpe_pressure = 0.0;
+        self.mpe_timbre = 0.0;
         self.midi_note = midi_note;
         self.velocity = velocity.clamp(0.0, 1.0);
         self.gate = true;
@@ -374,6 +381,16 @@ impl ProphetVoice {
             return (0.0, 0.0);
         }
 
+        if self.unison_ramp > 0 {
+            let remaining = self.unison_ramp as f32;
+            self.unison_detune_semis +=
+                (self.unison_target[0] - self.unison_detune_semis) / remaining;
+            self.unison_pan += (self.unison_target[1] - self.unison_pan) / remaining;
+            self.unison_ramp -= 1;
+        }
+        if params.glide_time_sec <= 0.0005 {
+            self.current_note_pitch = self.target_note_pitch;
+        }
         // Update Vintage Dispersion scaling on VCO and VCF tolerances
         let vintage = params.vintage_amount.clamp(0.0, 1.5);
         self.vco.cents_offset_a = self.trimpots.vco_a_cents * vintage;
@@ -475,9 +492,8 @@ impl ProphetVoice {
             } else {
                 2.0
             };
-            (lo_base
-                * ((params.osc_b_semi + params.osc_b_fine_cents * 0.01) * (1.0 / 12.0)).exp2())
-            .clamp(0.05, 150.0)
+            (lo_base * ((params.osc_b_semi + params.osc_b_fine_cents * 0.01) * (1.0 / 12.0)).exp2())
+                .clamp(0.05, 150.0)
         } else {
             let osc_b_pitch_semis = (if params.osc_b_waves.key_tracking {
                 base_pitch
@@ -514,7 +530,10 @@ impl ProphetVoice {
         let osc_a_pw_base = params.osc_a_pw + lfo_pw;
         let pm_pw_scale = osc_b_polymod * params.poly_mod.dest_osc_a_pw * 0.48;
         let fixed_pw_a = if pm_pw_scale == 0.0 {
-            Some((osc_a_pw_base + static_polymod * params.poly_mod.dest_osc_a_pw * 0.48).clamp(0.01, 0.99))
+            Some(
+                (osc_a_pw_base + static_polymod * params.poly_mod.dest_osc_a_pw * 0.48)
+                    .clamp(0.01, 0.99),
+            )
         } else {
             None
         };
@@ -526,7 +545,8 @@ impl ProphetVoice {
         let pm_filt_scale = osc_b_polymod * params.poly_mod.dest_filter_cutoff * 5.0;
         let cutoff_needs_substep_update = pm_filt_scale != 0.0;
         if !cutoff_needs_substep_update {
-            let oct_arg = cutoff_octaves_base + static_polymod * params.poly_mod.dest_filter_cutoff * 5.0;
+            let oct_arg =
+                cutoff_octaves_base + static_polymod * params.poly_mod.dest_filter_cutoff * 5.0;
             if oct_arg != self.cached_cutoff_arg {
                 self.cached_cutoff_arg = oct_arg;
                 self.cached_cutoff_exp2 = oct_arg.exp2();
@@ -550,8 +570,8 @@ impl ProphetVoice {
             let freq_a_hz = match fixed_freq_a {
                 Some(f) => f,
                 None => {
-                    let osc_a_pitch_semis = osc_a_pitch_base
-                        + (poly_mod_bus * params.poly_mod.dest_osc_a_freq * 48.0);
+                    let osc_a_pitch_semis =
+                        osc_a_pitch_base + (poly_mod_bus * params.poly_mod.dest_osc_a_freq * 48.0);
                     440.0 * ((osc_a_pitch_semis - 69.0) * (1.0 / 12.0)).exp2()
                 }
             };
@@ -636,7 +656,8 @@ pub struct ProphetVoiceAllocator {
     pub note_priority: NotePriority,
     pub last_triggered_pitch: Option<f32>,
     /// Held MIDI notes stack (fixed-size array, zero heap allocations)
-    held_notes: [u8; 32],
+    held_notes: [u8; 128],
+    velocities: [f32; 128],
     held_count: usize,
     last_voice_out: [f32; NUM_VOICES],
 }
@@ -654,7 +675,8 @@ impl ProphetVoiceAllocator {
             unison_stereo_spread: 0.85,
             note_priority: NotePriority::Last,
             last_triggered_pitch: None,
-            held_notes: [0; 32],
+            held_notes: [0; 128],
+            velocities: [0.; 128],
             held_count: 0,
             last_voice_out: [0.0; NUM_VOICES],
         }
@@ -667,10 +689,26 @@ impl ProphetVoiceAllocator {
     }
 
     pub fn note_on(&mut self, midi_note: u8, velocity: f32, params: &SynthVoiceParams) {
+        self.note_on_with_reuse(midi_note, velocity, params, true);
+    }
+
+    pub fn note_on_with_reuse(
+        &mut self,
+        midi_note: u8,
+        velocity: f32,
+        params: &SynthVoiceParams,
+        reuse: bool,
+    ) {
+        if midi_note > 127 || !velocity.is_finite() {
+            return;
+        }
+        self.velocities[midi_note as usize] = velocity;
         self.event_counter = self.event_counter.wrapping_add(1);
 
         // Push note into held stack if not already present
-        if !self.held_notes[..self.held_count].contains(&midi_note) && self.held_count < 32 {
+        if !self.held_notes[..self.held_count].contains(&midi_note)
+            && self.held_count < self.held_notes.len()
+        {
             self.held_notes[self.held_count] = midi_note;
             self.held_count += 1;
         }
@@ -682,18 +720,10 @@ impl ProphetVoiceAllocator {
             self.last_triggered_pitch = Some(target_note as f32);
 
             for i in 0..n_uni {
-                let norm_pos = if n_uni > 1 {
-                    (i as f32) / ((n_uni - 1) as f32) * 2.0 - 1.0
-                } else {
-                    0.0
-                };
-                // Non-linear symmetric detune law (cubic emphasis on outer voices)
-                let non_linear = 0.65 * norm_pos + 0.35 * norm_pos * norm_pos * norm_pos;
-                let detune_semis = (non_linear * self.unison_detune_cents) * 0.01;
-                let pan = norm_pos * self.unison_stereo_spread;
-
+                let (detune, pan) = self.stack_position(i, n_uni);
                 let was_active = self.voices[i].is_active();
-                self.voices[i].unison_detune_semis = detune_semis;
+                self.voices[i].unison_ramp = 0;
+                self.voices[i].unison_detune_semis = detune;
                 self.voices[i].unison_pan = pan;
                 self.voices[i].trigger_note_on(
                     target_note,
@@ -710,11 +740,12 @@ impl ProphetVoiceAllocator {
         }
 
         // Polyphonic Circular Allocation + Intelligent Voice Stealing
-        let voice_idx = self.find_voice_for_note(midi_note);
+        let voice_idx = self.find_voice_for_note(midi_note, reuse);
         let was_active = self.voices[voice_idx].is_active();
         let prev_pitch = self.last_triggered_pitch;
         self.last_triggered_pitch = Some(midi_note as f32);
 
+        self.voices[voice_idx].unison_ramp = 0;
         self.voices[voice_idx].unison_detune_semis = 0.0;
         self.voices[voice_idx].unison_pan = self.voices[voice_idx].trimpots.pan;
         self.voices[voice_idx].trigger_note_on(
@@ -727,6 +758,93 @@ impl ProphetVoiceAllocator {
             was_active,
             self.last_voice_out[voice_idx],
         );
+    }
+
+    fn stack_position(&self, i: usize, n: usize) -> (f32, f32) {
+        let pos = if n > 1 {
+            i as f32 / (n - 1) as f32 * 2.0 - 1.0
+        } else {
+            0.0
+        };
+        let detune = 0.65 * pos + 0.35 * pos * pos * pos;
+        (
+            (detune * self.unison_detune_cents) * 0.01,
+            pos * self.unison_stereo_spread,
+        )
+    }
+
+    /// Keep the envelopes of retained members running while automation changes the stack.
+    pub fn configure_unison(
+        &mut self,
+        enabled: bool,
+        count: usize,
+        detune: f32,
+        spread: f32,
+        params: &SynthVoiceParams,
+    ) {
+        let count = count.clamp(1, NUM_VOICES);
+        if (enabled, count, detune, spread)
+            == (
+                self.unison_enabled,
+                self.unison_voices,
+                self.unison_detune_cents,
+                self.unison_stereo_spread,
+            )
+        {
+            return;
+        }
+        let was_unison = self.unison_enabled;
+        self.unison_enabled = enabled;
+        self.unison_voices = count;
+        self.unison_detune_cents = detune;
+        self.unison_stereo_spread = spread;
+        if self.held_count == 0 {
+            return;
+        }
+        let target = self.select_priority_note(self.held_notes[self.held_count - 1]);
+        if enabled {
+            for i in 0..NUM_VOICES {
+                let (pitch, pan) = self.stack_position(i, count);
+                let v = &mut self.voices[i];
+                if i >= count {
+                    if v.gate {
+                        v.trigger_note_off();
+                    }
+                    continue;
+                }
+                if !v.gate || v.midi_note != target {
+                    v.trigger_note_on(
+                        target,
+                        self.velocities[target as usize],
+                        Some(target as f32),
+                        0.0,
+                        params.glide_mode,
+                        self.event_counter,
+                        v.is_active(),
+                        v.last_mono,
+                    );
+                }
+                v.unison_target = [pitch, pan];
+                v.unison_ramp = (0.005 * v.base_sample_rate).max(1.0) as u32;
+            }
+        } else if was_unison {
+            let mut kept = false;
+            for v in &mut self.voices {
+                if v.gate && v.midi_note == target && !kept {
+                    kept = true;
+                    v.unison_target = [0.0, v.trimpots.pan];
+                    v.unison_ramp = (0.005 * v.base_sample_rate) as u32;
+                } else if v.gate {
+                    v.trigger_note_off();
+                }
+            }
+            let held = self.held_notes;
+            for &key in &held[..self.held_count] {
+                if key != target {
+                    self.note_on(key, self.velocities[key as usize], params);
+                }
+            }
+        }
     }
 
     pub fn note_off(&mut self, midi_note: u8, params: &SynthVoiceParams) {
@@ -753,7 +871,13 @@ impl ProphetVoiceAllocator {
                         .max(0.01);
                     let samples =
                         (params.glide_time_sec * self.voices[i].base_sample_rate).max(1.0);
-                    self.voices[i].glide_rate_semis_per_sample = dist / samples;
+                    if params.glide_time_sec <= 0.0005 {
+                        self.voices[i].current_note_pitch = fallback_note as f32;
+                    }
+                    self.voices[i].glide_rate_semis_per_sample = match params.glide_mode {
+                        GlideMode::ConstantTime => dist / samples,
+                        GlideMode::ConstantRate => 12.0 / samples,
+                    };
                 }
             } else {
                 for v in &mut self.voices {
@@ -797,10 +921,10 @@ impl ProphetVoiceAllocator {
     }
 
     /// Prophet-10 Circular Allocation + Release-Priority Lowest-Amplitude Stealing.
-    fn find_voice_for_note(&mut self, midi_note: u8) -> usize {
+    fn find_voice_for_note(&mut self, midi_note: u8, reuse: bool) -> usize {
         // 1. Re-use same physical voice board if retriggering an identical note
         for (i, v) in self.voices.iter().enumerate() {
-            if v.midi_note == midi_note && v.is_active() {
+            if reuse && v.midi_note == midi_note && v.is_active() {
                 self.rotating_cursor = (i + 1) % NUM_VOICES;
                 return i;
             }
