@@ -417,3 +417,9 @@ mod tests {
         assert!(out_r.iter().all(|x| x.is_finite()));
     }
 }
+
+#[path = "../../prophet-dsp-core/src/blep.rs"]
+mod blep;
+
+#[path = "../../prophet-dsp-core/src/noise.rs"]
+mod noise;
