@@ -103,3 +103,28 @@ fn glide_laws_and_mid_note_disable_at_three_rates() {
         }
     }
 }
+
+#[test]
+fn poly_restores_two_owners_of_same_key_after_unison() {
+    let mut p = ProphetXiiPlugin::default();
+    p.handle_midi_message(0x91, 60, 70);
+    p.handle_midi_message(0xd1, 127, 0);
+    p.handle_midi_message(0x92, 60, 100);
+    p.handle_midi_message(0xd2, 0, 0);
+    p.ipc.params.set(UnisonEnabled, 1.);
+    p.sync_parameters();
+    p.ipc.params.set(UnisonEnabled, 0.);
+    p.sync_parameters();
+    assert_eq!(
+        p.kernel.allocator.voices.iter().filter(|v| v.gate).count(),
+        2
+    );
+    p.handle_midi_message(0x82, 60, 0);
+    let mut live = p.kernel.allocator.voices.iter().filter(|v| v.gate);
+    let first = live.next().unwrap();
+    assert_eq!(first.mpe_pressure, 1.);
+    assert_eq!(first.velocity, 70. / 127.);
+    assert!(live.next().is_none());
+    p.handle_midi_message(0x81, 60, 0);
+    assert!(p.kernel.allocator.voices.iter().all(|v| !v.gate));
+}

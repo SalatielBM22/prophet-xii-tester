@@ -11,6 +11,7 @@ pub struct Note {
     pub sostenuto: bool,
     generation: u64,
     bend: i16,
+    velocity: u8,
     pressure: u8,
     timbre: Option<u8>,
 }
@@ -58,6 +59,55 @@ impl ProphetXiiPlugin {
                     note.apply_expression(v);
                     v.note_age = note.generation;
                 }
+            }
+        }
+    }
+    /// The legacy allocator tracks keys. Restore distinct MIDI note identities
+    /// (including overlapping equal keys) when a mono stack returns to poly.
+    pub(crate) fn restore_poly_owners(&mut self) {
+        use prophet_dsp::voice::NUM_VOICES;
+        let mut held = self.ownership.notes;
+        held.sort_unstable_by_key(|n| core::cmp::Reverse(n.map(|n| n.generation)));
+        let a = &mut self.kernel.allocator;
+        let mut used = [false; NUM_VOICES];
+        let mut missing = [None; NUM_VOICES];
+        for (j, n) in held[..NUM_VOICES].iter().flatten().enumerate() {
+            let index = a
+                .voices
+                .iter()
+                .enumerate()
+                .filter(|(i, v)| !used[*i] && v.gate && v.midi_note == n.key)
+                .max_by_key(|(_, v)| v.note_age == n.generation)
+                .map(|(i, _)| i);
+            if let Some(i) = index {
+                used[i] = true;
+                let v = &mut a.voices[i];
+                v.note_age = n.generation;
+                v.velocity = f32::from(n.velocity) / 127.;
+                n.apply_expression(v);
+            } else {
+                missing[j] = Some(*n);
+            }
+        }
+        for (v, used) in a.voices.iter_mut().zip(used) {
+            if !used && v.gate {
+                v.trigger_note_off();
+            }
+        }
+        for n in missing.into_iter().flatten() {
+            a.note_on_with_reuse(
+                n.key,
+                f32::from(n.velocity) / 127.,
+                &self.kernel.voice_params,
+                false,
+            );
+            if let Some(v) = a
+                .voices
+                .iter_mut()
+                .find(|v| v.gate && v.note_age == a.event_counter)
+            {
+                v.note_age = n.generation;
+                n.apply_expression(v);
             }
         }
     }
@@ -134,6 +184,7 @@ impl ProphetXiiPlugin {
                     key: d1,
                     note_id: id,
                     pressed: true,
+                    velocity: d2,
                     sostenuto: false,
                     generation: self.kernel.allocator.event_counter,
                     ..Default::default()

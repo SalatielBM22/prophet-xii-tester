@@ -265,7 +265,8 @@ impl ProphetXiiPlugin {
         let a = &mut self.kernel.allocator;
         let unison = b.get(ParamId::UnisonEnabled) >= 0.5;
         let voices = b.get(ParamId::UnisonVoices).round() as usize;
-        let resize=unison && (!a.unison_enabled || a.unison_voices!=voices);
+        let returning_to_poly = a.unison_enabled && !unison;
+        let resize = unison && (!a.unison_enabled || a.unison_voices != voices);
         a.configure_unison(
             unison,
             voices,
@@ -278,7 +279,12 @@ impl ProphetXiiPlugin {
             2 => prophet_dsp::voice::NotePriority::High,
             _ => prophet_dsp::voice::NotePriority::Last,
         };
-        if resize {self.refresh_stack();}
+        if resize {
+            self.refresh_stack();
+        }
+        if returning_to_poly {
+            self.restore_poly_owners();
+        }
     }
     pub fn panic(&mut self) {
         self.ownership = Default::default();
