@@ -278,7 +278,13 @@ impl MoogLadderFilter {
             u2 += du2;
             u3 += du3;
 
-            if du0.abs().max(du1.abs()).max(du2.abs()).max(du3.abs()) <= step_tol {
+            if du0
+                .abs()
+                .max(du1.abs())
+                .max(du2.abs())
+                .max(du3.abs())
+                <= step_tol
+            {
                 converged = true;
                 break;
             }

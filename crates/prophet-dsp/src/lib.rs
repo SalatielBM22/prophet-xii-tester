@@ -6,6 +6,7 @@
 pub mod env_cem3310;
 pub mod fx;
 pub mod osc_cem3340;
+#[path = "../../prophet-dsp-core/src/oversample.rs"]
 pub mod oversample;
 pub mod vcf_cem3320;
 pub mod vcf_moog;
@@ -105,6 +106,16 @@ impl Default for KernelTelemetrySnapshot {
     }
 }
 
+/// The historical host API retains its original output saturation for old projects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputPolicy { #[default] LegacyRC1, FloatBus }
+impl OutputPolicy {
+    #[inline]
+    pub fn sample(self, value:f32)->f32 {
+        match self {Self::LegacyRC1=>value.clamp(-1.0,1.0),Self::FloatBus=>value}
+    }
+}
+
 /// Top-Level PROPHET-XII Real-Time Synthesis & Effects Kernel.
 #[repr(C, align(32))]
 pub struct ProphetXiiKernel {
@@ -117,6 +128,7 @@ pub struct ProphetXiiKernel {
     pub cutoff_smoother: OnePoleSmoother,
     pub res_smoother: OnePoleSmoother,
     pub master_gain: f32,
+    pub output_policy: OutputPolicy,
     pub sample_rate: f32,
     pub last_telemetry: KernelTelemetrySnapshot,
     smooth: [OnePoleSmoother; 24],
@@ -162,6 +174,7 @@ impl ProphetXiiKernel {
             reverb_params: SolarisReverbParams::default(),
             cutoff_smoother: OnePoleSmoother::new(voice_params.filter_cutoff_hz, 4.0, sr),
             res_smoother: OnePoleSmoother::new(voice_params.filter_resonance, 4.0, sr),
+            output_policy: OutputPolicy::LegacyRC1,
             master_gain: 0.85,
             sample_rate: sr,
             last_telemetry: KernelTelemetrySnapshot::default(),
@@ -265,12 +278,12 @@ impl ProphetXiiKernel {
                 let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
                 let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
                 let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
-                let (rev_l, rev_r) =
-                    self.reverb
-                        .process_stereo(chor_l, chor_r, &self.reverb_params);
+                let (rev_l, rev_r) = self
+                    .reverb
+                    .process_stereo(chor_l, chor_r, &self.reverb_params);
 
-                let final_l = (rev_l * gain).clamp(-1.0, 1.0);
-                let final_r = (rev_r * gain).clamp(-1.0, 1.0);
+                let final_l = self.output_policy.sample(rev_l * gain);
+                let final_r = self.output_policy.sample(rev_r * gain);
 
                 out_l[i] = final_l;
                 out_r[i] = final_r;
@@ -310,13 +323,13 @@ impl ProphetXiiKernel {
                 let (_raw_lfo, lfo_mod) = self.global_lfo.process_sample();
                 let (dry_l, dry_r) = self.allocator.process_sample(&local_params, lfo_mod);
                 let (chor_l, chor_r) = self.chorus.process_stereo(dry_l, dry_r);
-                let (rev_l, rev_r) =
-                    self.reverb
-                        .process_stereo(chor_l, chor_r, &self.reverb_params);
+                let (rev_l, rev_r) = self
+                    .reverb
+                    .process_stereo(chor_l, chor_r, &self.reverb_params);
 
                 let gain = self.gain_smoother.next();
-                let final_l = (rev_l * gain).clamp(-1.0, 1.0);
-                let final_r = (rev_r * gain).clamp(-1.0, 1.0);
+                let final_l = self.output_policy.sample(rev_l * gain);
+                let final_r = self.output_policy.sample(rev_r * gain);
 
                 out_l[i] = final_l;
                 out_r[i] = final_r;

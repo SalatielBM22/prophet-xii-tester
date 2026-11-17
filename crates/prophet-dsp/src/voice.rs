@@ -122,6 +122,8 @@ pub struct SynthVoiceParams {
     pub filter_cutoff_hz: f32,
     pub filter_resonance: f32,
     pub filter_drive: f32,
+    /// Optional post-VCF gain equal to drive, unity at drive 1.
+    pub drive_makeup: bool,
     pub filter_env_amount: f32,
     /// Keyboard tracking: 0.0 (Off), 0.5 (Half), 1.0 (Full)
     pub filter_key_track: f32,
@@ -168,6 +170,7 @@ impl Default for SynthVoiceParams {
             noise_pink_blend: 0.7,
             filter_cutoff_hz: 2400.0,
             filter_resonance: 0.25,
+            drive_makeup: false,
             filter_drive: 1.1,
             filter_env_amount: 0.45,
             filter_key_track: 0.5,
@@ -620,6 +623,7 @@ impl ProphetVoice {
         });
 
         let mut voice_out = filtered_sample * vca_gain;
+        if params.drive_makeup {voice_out *= params.filter_drive;}
 
         // Apply 1.5 ms anti-click crossfade if this voice card was stolen from an active note
         if self.steal_fade_remaining > 0 {

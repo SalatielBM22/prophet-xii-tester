@@ -164,11 +164,7 @@ impl EnsembleBandChannel {
 
         // 2. Dynamic Envelope Follower (15 ms attack, 120 ms release)
         let rect = bp.abs();
-        let coeff = if rect > self.env {
-            att_coeff
-        } else {
-            rel_coeff
-        };
+        let coeff = if rect > self.env { att_coeff } else { rel_coeff };
         self.env = flush_tiny(self.env + (rect - self.env) * coeff);
 
         // 3. Harmonic Partial Synthesis (2nd and 3rd harmonics with Solina 3-phase modulation)
@@ -288,31 +284,15 @@ impl EnsembleBank {
             let v2 = ic2 + g_arr[i] * v1;
             let next_ic1 = 2.0 * v1 - ic1;
             let next_ic2 = 2.0 * v2 - ic2;
-            ic1_arr[i] = if next_ic1.abs() < 1.0e-20 {
-                0.0
-            } else {
-                next_ic1
-            };
-            ic2_arr[i] = if next_ic2.abs() < 1.0e-20 {
-                0.0
-            } else {
-                next_ic2
-            };
+            ic1_arr[i] = if next_ic1.abs() < 1.0e-20 { 0.0 } else { next_ic1 };
+            ic2_arr[i] = if next_ic2.abs() < 1.0e-20 { 0.0 } else { next_ic2 };
             let bp = v1 * k_inv_q;
 
             let rect = bp.abs();
             let prev_env = env_arr[i];
-            let coeff = if rect > prev_env {
-                att_coeff
-            } else {
-                rel_coeff
-            };
+            let coeff = if rect > prev_env { att_coeff } else { rel_coeff };
             let next_env = prev_env + (rect - prev_env) * coeff;
-            let next_env = if next_env.abs() < 1.0e-20 {
-                0.0
-            } else {
-                next_env
-            };
+            let next_env = if next_env.abs() < 1.0e-20 { 0.0 } else { next_env };
             env_arr[i] = next_env;
 
             let inc2 = dt2_arr[i] * freq_mod;
@@ -328,7 +308,8 @@ impl EnsembleBank {
             let p3 = if p3_raw >= 1.0 { p3_raw - 1.0 } else { p3_raw };
             ph3_arr[i] = p3;
 
-            let harmonic = (0.72 * m2) * fast_unit_sine(p2) + (0.28 * m3) * fast_unit_sine(p3);
+            let harmonic =
+                (0.72 * m2) * fast_unit_sine(p2) + (0.28 * m3) * fast_unit_sine(p3);
             let boost = (next_env * 2.5).min(1.5);
             let env_shaped = next_env * (1.0 + forte_boost * boost);
             lanes_out[i] = env_shaped * harmonic;
@@ -870,15 +851,15 @@ impl SolarisCloudburstReverb {
             }
             let att = self.env_att_coeff;
             let rel = self.env_rel_coeff;
-            let lane0 =
-                self.ensemble_bank
-                    .process_lane(0, cascaded, att, rel, freq_mods[0], forte_boost);
-            let lane1 =
-                self.ensemble_bank
-                    .process_lane(1, cascaded, att, rel, freq_mods[1], forte_boost);
-            let lane2 =
-                self.ensemble_bank
-                    .process_lane(2, cascaded, att, rel, freq_mods[2], forte_boost);
+            let lane0 = self
+                .ensemble_bank
+                .process_lane(0, cascaded, att, rel, freq_mods[0], forte_boost);
+            let lane1 = self
+                .ensemble_bank
+                .process_lane(1, cascaded, att, rel, freq_mods[1], forte_boost);
+            let lane2 = self
+                .ensemble_bank
+                .process_lane(2, cascaded, att, rel, freq_mods[2], forte_boost);
             // 3-phase Solina stereo spread (weights sum to 1.0 across L+R)
             let sum_l = 0.80 * lane0 + 0.50 * lane1 + 0.20 * lane2;
             let sum_r = 0.20 * lane0 + 0.50 * lane1 + 0.80 * lane2;
@@ -1035,12 +1016,8 @@ impl SolarisCloudburstReverb {
         // Stage 3b: Continuous 5-Vowel Formant Filter on the stereo wet readout (never collapsing tank RT60)
         let (vow_l, vow_r) = if params.vowel_mix > 1.0e-4 {
             let vm = params.vowel_mix.clamp(0.0, 1.0);
-            let fl = self
-                .vowel_l
-                .process(raw_tank_l, params.vowel_morph, self.sample_rate);
-            let fr = self
-                .vowel_r
-                .process(raw_tank_r, params.vowel_morph, self.sample_rate);
+            let fl = self.vowel_l.process(raw_tank_l, params.vowel_morph, self.sample_rate);
+            let fr = self.vowel_r.process(raw_tank_r, params.vowel_morph, self.sample_rate);
             // 1.65x formant gain keeps peak resonator gain (1.65/1.85 = 0.892) strictly passive (<1.0)
             // while maintaining clear vowel spectral contour against diffuse wet energy.
             let dry_v = 1.0 - vm;

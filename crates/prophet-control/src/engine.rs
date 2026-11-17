@@ -10,6 +10,9 @@ pub struct PreparedEngine {
     frames: u64,
 }
 impl PreparedEngine {
+    pub fn set_drive_makeup(&mut self, enabled: bool) {
+        self.synth.kernel.voice_params.drive_makeup = enabled;
+    }
     pub fn revision(&self) -> u64 {
         self.synth.ipc.params.revision.load(Ordering::Relaxed)
     }
@@ -108,6 +111,7 @@ impl EnginePort for PreparedEngine {
             .params
             .set(ParamId::OversamplingMode, config.oversampling as f32);
         synth.sync_parameters();
+        synth.kernel.output_policy = prophet_dsp::OutputPolicy::FloatBus;
         Ok(Self {
             synth,
             config,
