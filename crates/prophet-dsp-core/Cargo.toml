@@ -1,0 +1,8 @@
+[package]
+name = "prophet-dsp-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Bounded portable engine primitives for PROPHET-XII"
+
+[workspace]

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "owner": "B",
+  "requests": [
+    "Expose p83 separately from RC1 p0..p82 and existing named FX switches; preserve RC1 project recall.",
+    "Assign canonical origin, serial and noteId before fan-out. Send ordered sample offsets. Drain ACKs and snapshots outside process.",
+    "Use prepared oversampling and report actual driver latency/xruns separately.",
+    "Map diagnostic VCF classes to graph visibility; show unavailable capabilities disabled.",
+    "Bind pattern/XY/FX controls only to negotiated engine revisions. Publish adapter acceptance at the pinned SHA."
+  ]
+}

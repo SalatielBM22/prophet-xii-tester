@@ -1,0 +1,5 @@
+// Generated from control-v1.schema.json. Wire values only.
+export type EngineMessage =
+  | { kind: "block"; version: 1; frames: number; commands: Array<{ offset: number; origin: number; serial: number; action: { kind: "midi"; status: number; data1: number; data2: number; noteId: number } | { kind: "parameter"; id: number; value: number } | { kind: "vectorXY"; x: number; y: number } | { kind: "panicOrigin" } }> }
+  | { kind: "ack"; version: 1; origin: number; serial: number; status: "applied" | "duplicate" | "capacity" | "unsupported" | "invalid"; revision: string }
+  | { kind: "snapshot"; version: 1; revision: string; renderedFrames: string; sampleRate: number; maxFrames: number; latencySamples: 0 | 16 | 24; notes: Array<{ origin: number; channel: number; key: number; noteId: number; pressed: boolean; sustained: boolean }>; voices: Array<{ index: number; key: number; gate: boolean; releasing: boolean; detuneSemis: number; pan: number }>; fx: { algorithm: "LegacyRC1" | "DiffuseV1"; version: 1; enabled: boolean; tail: "spill" | "kill"; frozen: boolean; dormant: boolean }; capabilities: Array<string>; xruns: number | null; cpuPercent: number | null };

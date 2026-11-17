@@ -1,0 +1,407 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EnginePort v1 bridge",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "block"
+        },
+        "version": {
+          "const": 1
+        },
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1023
+              },
+              "origin": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15
+              },
+              "serial": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              },
+              "action": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "midi"
+                      },
+                      "status": {
+                        "type": "integer",
+                        "minimum": 128,
+                        "maximum": 239
+                      },
+                      "data1": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 127
+                      },
+                      "data2": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 127
+                      },
+                      "noteId": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4294967295
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "status",
+                      "data1",
+                      "data2",
+                      "noteId"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "parameter"
+                      },
+                      "id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 83
+                      },
+                      "value": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "vectorXY"
+                      },
+                      "x": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1
+                      },
+                      "y": {
+                        "type": "number",
+                        "minimum": -1,
+                        "maximum": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "x",
+                      "y"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "panicOrigin"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "offset",
+              "origin",
+              "serial",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "kind",
+        "version",
+        "frames",
+        "commands"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "ack"
+        },
+        "version": {
+          "const": 1
+        },
+        "origin": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "serial": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "duplicate",
+            "capacity",
+            "unsupported",
+            "invalid"
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        }
+      },
+      "required": [
+        "kind",
+        "version",
+        "origin",
+        "serial",
+        "status",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "snapshot"
+        },
+        "version": {
+          "const": 1
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "renderedFrames": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "sampleRate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 192000
+        },
+        "maxFrames": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "latencySamples": {
+          "enum": [
+            0,
+            16,
+            24
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15
+              },
+              "channel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15
+              },
+              "key": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 127
+              },
+              "noteId": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "pressed": {
+                "type": "boolean"
+              },
+              "sustained": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "origin",
+              "channel",
+              "key",
+              "noteId",
+              "pressed",
+              "sustained"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 128
+        },
+        "voices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 11
+              },
+              "key": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 127
+              },
+              "gate": {
+                "type": "boolean"
+              },
+              "releasing": {
+                "type": "boolean"
+              },
+              "detuneSemis": {
+                "type": "number"
+              },
+              "pan": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "index",
+              "key",
+              "gate",
+              "releasing",
+              "detuneSemis",
+              "pan"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 12
+        },
+        "fx": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "enum": [
+                "LegacyRC1",
+                "DiffuseV1"
+              ]
+            },
+            "version": {
+              "const": 1
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "tail": {
+              "enum": [
+                "spill",
+                "kill"
+              ]
+            },
+            "frozen": {
+              "type": "boolean"
+            },
+            "dormant": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "algorithm",
+            "version",
+            "enabled",
+            "tail",
+            "frozen",
+            "dormant"
+          ],
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32
+        },
+        "xruns": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cpuPercent": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "version",
+        "revision",
+        "renderedFrames",
+        "sampleRate",
+        "maxFrames",
+        "latencySamples",
+        "notes",
+        "voices",
+        "fx",
+        "capabilities",
+        "xruns",
+        "cpuPercent"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

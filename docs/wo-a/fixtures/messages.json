@@ -1,0 +1,82 @@
+[
+  {
+    "kind": "block",
+    "version": 1,
+    "frames": 480,
+    "commands": [
+      {
+        "offset": 0,
+        "origin": 1,
+        "serial": 1,
+        "action": {
+          "kind": "parameter",
+          "id": 83,
+          "value": 0
+        }
+      },
+      {
+        "offset": 37,
+        "origin": 1,
+        "serial": 2,
+        "action": {
+          "kind": "midi",
+          "status": 144,
+          "data1": 60,
+          "data2": 100,
+          "noteId": 9
+        }
+      }
+    ]
+  },
+  {
+    "kind": "ack",
+    "version": 1,
+    "origin": 1,
+    "serial": 2,
+    "status": "applied",
+    "revision": "31"
+  },
+  {
+    "kind": "snapshot",
+    "version": 1,
+    "revision": "31",
+    "renderedFrames": "480",
+    "sampleRate": 48000,
+    "maxFrames": 480,
+    "latencySamples": 16,
+    "notes": [
+      {
+        "origin": 1,
+        "channel": 0,
+        "key": 60,
+        "noteId": 9,
+        "pressed": true,
+        "sustained": false
+      }
+    ],
+    "voices": [
+      {
+        "index": 0,
+        "key": 60,
+        "gate": true,
+        "releasing": false,
+        "detuneSemis": 0,
+        "pan": 0.1
+      }
+    ],
+    "fx": {
+      "algorithm": "LegacyRC1",
+      "version": 1,
+      "enabled": true,
+      "tail": "spill",
+      "frozen": false,
+      "dormant": false
+    },
+    "capabilities": [
+      "enginePortV1",
+      "glideEnabled"
+    ],
+    "xruns": null,
+    "cpuPercent": null
+  }
+]
