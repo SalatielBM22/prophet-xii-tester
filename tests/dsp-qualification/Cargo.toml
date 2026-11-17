@@ -1,0 +1,14 @@
+[package]
+name = "wo-a-probes"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[workspace]
+[dependencies]
+prophet-dsp = {path="../../crates/prophet-dsp"}
+prophet-control = {path="../../crates/prophet-control"}
+prophet-analysis-core = {path="../../crates/prophet-analysis-core"}
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
