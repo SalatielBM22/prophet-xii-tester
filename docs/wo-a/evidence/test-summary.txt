@@ -1,0 +1,116 @@
+Source: f186ea10d752092d1d0b8ebc7c44226398f7d124
+Linux x86_64, Rust 1.100.0, Cargo 1.100.0
+
+Scoped cargo test: exit 0, 42 passed.
+test validity::tests::known_gain_and_invalid_regimes ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test timestamped_midi_sustain_cc_bend_and_panic ... ok
+test invalid_events_and_nonfinite_params_are_rejected ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test held_stack_survives_live_count_and_spread ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test invalid_block_is_atomic_and_glide_is_independent ... ok
+test overlap_replay_and_scoped_pedals ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test tests::test_cem3340_hard_sync_and_polyblep_bounded ... ok
+test tests::test_zdf_filters_self_oscillation_and_stability ... ok
+test tests::test_kernel_12_voices_and_fx_pipeline ... ok
+test vcf_moog::tests::fast_moog_solver_matches_reference_across_sweeps_and_saturation ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+test adsr_times_and_noteoff ... ok
+test hadamard_is_orthogonal ... ok
+test filter_stress_and_actual_feedback_solution ... ok
+test oversampler_dc_latency_stopband ... ok
+test chorus_silence_and_stereo_modes ... ok
+test deterministic_and_block_partition_invariant ... ok
+test unison_one_to_twelve_priorities ... ok
+test no_callback_allocations ... ok
+test zdf_equations_have_small_residuals ... ok
+test reverb_decay_and_freeze_bounded ... ok
+test twelve_voices_steal_and_release ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+test linear_morph_ramp_has_bounded_dc_transition_in_both_directions ... ok
+test morph_does_not_reintroduce_frozen_filter_state ... ok
+test oversampling_reported_latency_matches_generation_impulse ... ok
+test rational_saturator_derivative_matches_independent_finite_difference ... ok
+test envelope_progress_uses_time_and_reports_indefinite_sustain ... ok
+test four_pole_small_signal_matches_bilinear_analytic_transfer ... ok
+test chorus_tail_reaches_exact_silence_without_output_subnormals ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+test bypass_kill_spill_and_reenable_are_explicit ... ok
+test freeze_does_not_record_new_excitation_in_predelay ... ok
+test ensemble_modes_differentiate_harmonics_and_stereo_spread ... ok
+test kill_fades_dry_gain_and_accepts_new_audio_without_old_history ... ok
+test ensemble_shimmer_sensitivity_and_freeze_are_finite ... ok
+test fresh_zero_wet_stays_dormant_and_natural_tails_eventually_sleep ... ok
+test reset_invalidates_every_delay_and_restores_rng ... ok
+test vowel_formant_morph_selects_ae_iou_spectral_peaks ... ok
+test wet_dry_law_is_affine_for_the_same_tank ... ok
+test zero_wet_must_not_suspend_a_stale_tail ... ok
+test shimmer_octave_and_fifth_generate_expected_pitch_shifted_partials ... ok
+test ten_second_freeze_stays_flat_finite_and_decorrelated ... ok
+test calibrated_rt60_tracks_targets_across_48k_and_96k ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.64s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test smf_tempo_changes_and_wav ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Release reverb regression:
+running 13 tests
+test bypass_kill_spill_and_reenable_are_explicit ... ok
+test freeze_does_not_record_new_excitation_in_predelay ... ok
+test ensemble_modes_differentiate_harmonics_and_stereo_spread ... ok
+test kill_fades_dry_gain_and_accepts_new_audio_without_old_history ... ok
+test ensemble_shimmer_sensitivity_and_freeze_are_finite ... ok
+test reset_invalidates_every_delay_and_restores_rng ... ok
+test fresh_zero_wet_stays_dormant_and_natural_tails_eventually_sleep ... ok
+test vowel_formant_morph_selects_ae_iou_spectral_peaks ... ok
+test wet_dry_law_is_affine_for_the_same_tank ... ok
+test zero_wet_must_not_suspend_a_stale_tail ... ok
+test ten_second_freeze_stays_flat_finite_and_decorrelated ... ok
+test shimmer_octave_and_fifth_generate_expected_pitch_shifted_partials ... ok
+test calibrated_rt60_tracks_targets_across_48k_and_96k ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.35s
+
+RC1 reproduction (03a58bf, live_unison):
+running 1 test
+test held_stack_survives_live_count_and_spread ... FAILED
+
+failures:
+
+---- held_stack_survives_live_count_and_spread stdout ----
+
+thread 'held_stack_survives_live_count_and_spread' (4469) panicked at crates/prophet-control/tests/live_unison.rs:16:5:
+assertion `left == right` failed
+  left: 0
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    held_stack_survives_live_count_and_spread
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p prophet-control --test live_unison`
+
+Clippy: exit 0 with warnings.
+warning: `prophet-dsp` (lib test) generated 74 warnings (run `cargo clippy --fix --lib -p prophet-dsp --tests -- ` to apply 68 suggestions)
+warning: `prophet-dsp` (lib) generated 74 warnings (74 duplicates)
+warning: `prophet-params` (lib) generated 1 warning (run `cargo clippy --fix --lib -p prophet-params -- ` to apply 1 suggestion)
+warning: `prophet-dsp` (test "dsp") generated 1 warning
+warning: `prophet-params` (lib test) generated 1 warning (1 duplicate)
+
+No_std rlib cross-build: exit 0 on x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, aarch64-linux-android.
