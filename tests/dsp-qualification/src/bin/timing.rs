@@ -8,20 +8,23 @@ use std::{
 };
 struct Count;
 static CALLS: AtomicUsize = AtomicUsize::new(0);
+static BYTES: AtomicUsize = AtomicUsize::new(0);
 unsafe impl GlobalAlloc for Count {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         CALLS.fetch_add(1, Relaxed);
+        BYTES.fetch_add(l.size(), Relaxed);
         System.alloc(l)
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         CALLS.fetch_add(1, Relaxed);
+        BYTES.fetch_sub(l.size(), Relaxed);
         System.dealloc(p, l)
     }
 }
 #[global_allocator]
 static GLOBAL: Count = Count;
 fn main() {
-    println!("rate,oversampling,voices,topology,block,warmup,blocks,p50_us,p95_us,p99_us,max_us,budget_us,misses,alloc_free");
+    println!("rate,oversampling,voices,topology,block,warmup,blocks,p50_us,p95_us,p99_us,max_us,budget_us,misses,alloc_free,prepared_heap_bytes");
     for rate in [44100, 48000, 96000] {
         for os in [1, 2, 4] {
             for voices in [1, 6, 12] {
@@ -31,6 +34,7 @@ fn main() {
                     Topology::Extended4,
                     Topology::Vector4,
                 ] {
+                    let memory_before = BYTES.load(Relaxed);
                     let mut p = PreparedEngine::prepare(Prepare {
                         sample_rate: rate,
                         max_frames: 480,
@@ -42,6 +46,7 @@ fn main() {
                         ..Default::default()
                     })
                     .unwrap();
+                    let heap = BYTES.load(Relaxed) - memory_before;
                     let notes: [Command; 12] = std::array::from_fn(|i| Command {
                         offset: 0,
                         origin: 1,
@@ -80,7 +85,7 @@ fn main() {
                     let budget = 480e6 / f64::from(rate);
                     let misses = us.iter().filter(|v| **v > budget).count();
                     us.sort_unstable_by(f64::total_cmp);
-                    println!("{rate},{os},{voices},{topology:?},480,16,128,{:.3},{:.3},{:.3},{:.3},{budget:.3},{misses},{allocations}",us[63],us[121],us[126],us[127]);
+                    println!("{rate},{os},{voices},{topology:?},480,16,128,{:.3},{:.3},{:.3},{:.3},{budget:.3},{misses},{allocations},{heap}",us[63],us[121],us[126],us[127]);
                 }
             }
         }

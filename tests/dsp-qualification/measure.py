@@ -16,9 +16,9 @@ def dbc(value, reference):
 
 with (out / "drive.csv").open("w") as f:
     w = csv.writer(f)
-    w.writerow("rate model drive tones makeup rms sample_peak peak_4x_est dc thd_2_8_dbc imd3_dbc folded_h3_dbc".split())
+    w.writerow("rate os model drive tones makeup rms sample_peak peak_4x_est dc thd_2_8_dbc imd3_dbc folded_h3_dbc".split())
     for path in sorted(root.glob("drive*.f32")):
-        rate, model, drive, tones = map(int, path.stem.split("-")[1:])
+        rate, os, model, drive, tones = map(int, path.stem.split("-")[1:])
         raw = np.fromfile(path, dtype="<f4").astype(float)
         for makeup in [False, True]:
             x = raw * (drive if makeup else 1)
@@ -29,7 +29,7 @@ with (out / "drive.csv").open("w") as f:
             thd = dbc(np.linalg.norm(mag[np.arange(2, 9)*fund]), mag[fund]) if tones == 1 else ""
             imd = dbc(np.linalg.norm(mag[[21, 150]]), mag[fund]) if tones == 2 else ""
             fold = dbc(mag[len(x)-3*fund], mag[fund]) if tones == 3 else ""
-            w.writerow([rate, ["Curtis","Moog"][model], drive, tones, int(makeup), np.mean(x*x)**0.5, max(abs(x)), max(abs(interp)), np.mean(x), thd, imd, fold])
+            w.writerow([rate, os, ["Curtis","Moog"][model], drive, tones, int(makeup), np.mean(x*x)**0.5, max(abs(x)), max(abs(interp)), np.mean(x), thd, imd, fold])
 
 with (out / "reverb.csv").open("w") as f:
     w = csv.writer(f)

@@ -5,6 +5,7 @@ use prophet_dsp::{
         reverb::{Algorithm, ReverbPort, ReverbSlot},
         solaris_reverb::{EnsembleMode, SolarisReverbParams},
     },
+    oversample::{OversampleFactor, VoiceOversampler},
     vcf_moog::DualVcfStage,
 };
 use std::{
@@ -37,7 +38,7 @@ fn main() -> std::io::Result<()> {
                 None,
             )
             .unwrap();
-            assert_eq!(m.validity,Validity::LongTail);
+            assert_eq!(m.validity, Validity::LongTail);
             assert!(m.points.is_empty());
             writeln!(
                 report,
@@ -48,33 +49,45 @@ fn main() -> std::io::Result<()> {
                 m.relative_scaling_error
             )?;
         }
-        for model in 0..2 {
-            for drive in [1, 2, 4] {
-                for tones in [1, 2, 3] {
-                    let n = 8192;
-                    let mut f = DualVcfStage::new(rate as f32, 1.);
-                    f.set_params(
-                        if tones == 3 { 0.4 * rate as f32 } else { 2000. },
-                        0.2,
-                        drive as f32,
-                        0.5,
-                        model as f32,
-                    );
-                    let mut file = BufWriter::new(File::create(
-                        dir.join(format!("drive-{rate}-{model}-{drive}-{tones}.f32")),
-                    )?);
-                    for i in 0..2 * n {
-                        let phase = std::f64::consts::TAU * i as f64 / n as f64;
-                        let input = if tones == 3 {
-                            0.8 * (1703. * phase).sin()
-                        } else {
-                            0.25 * ((64. * phase).sin()
-                                + if tones == 2 { (107. * phase).sin() } else { 0. })
-                        };
-                        let y = f.process_sample(input as f32);
-                        assert!(y.is_finite());
-                        if i >= n {
-                            file.write_all(&y.to_le_bytes())?;
+        for factor in [
+            OversampleFactor::X1,
+            OversampleFactor::X2,
+            OversampleFactor::X4,
+        ] {
+            let os = factor.as_usize();
+            for model in 0..2 {
+                for drive in [1, 2, 4] {
+                    for tones in [1, 2, 3] {
+                        let n = 8192;
+                        let mut f = DualVcfStage::new((rate * os) as f32, 1.);
+                        let mut decimator = VoiceOversampler::new(factor);
+                        let mut sub = 0;
+                        f.set_params(
+                            if tones == 3 { 0.4 * rate as f32 } else { 2000. },
+                            0.2,
+                            drive as f32,
+                            0.5,
+                            model as f32,
+                        );
+                        let mut file = BufWriter::new(File::create(
+                            dir.join(format!("drive-{rate}-{os}-{model}-{drive}-{tones}.f32")),
+                        )?);
+                        for i in 0..2 * n {
+                            let y = decimator.process_voice_sample(|| {
+                                let phase = std::f64::consts::TAU * sub as f64 / (n * os) as f64;
+                                sub += 1;
+                                let input = if tones == 3 {
+                                    0.8 * (1703. * phase).sin()
+                                } else {
+                                    0.25 * ((64. * phase).sin()
+                                        + if tones == 2 { (107. * phase).sin() } else { 0. })
+                                };
+                                f.process_sample(input as f32)
+                            });
+                            assert!(y.is_finite());
+                            if i >= n {
+                                file.write_all(&y.to_le_bytes())?;
+                            }
                         }
                     }
                 }
