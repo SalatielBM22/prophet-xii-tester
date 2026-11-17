@@ -34,9 +34,21 @@ fn checksum_and_vector_pattern_roundtrip() {
     let mut bank = Box::<PatternBank>::default();
     bank.0[63].steps[31].kind = Kind::Tie;
     p.bank = Some(bank);
+    p.performance = Some(prophet_preset::Performance {
+        tempo_milli: 123456,
+        swing: 25,
+        pattern: 63,
+        mode: 4,
+        octaves: 3,
+        latch: true,
+        seed: 1823,
+    });
     let bytes = p.encode().unwrap();
     let q = Preset::decode(&bytes).unwrap();
     assert_eq!(q.bank.as_ref().unwrap().0[63].steps[31].kind, Kind::Tie);
+    assert_eq!(p.performance, q.performance);
+    let (_, arp) = q.performance.unwrap().prepare(44100).unwrap();
+    assert_eq!(arp.seed, 1823);
     let e = q.sound.prepare(48000, 64).unwrap();
     assert_eq!(e.patch(), p.sound.patch);
     assert_eq!(e.reverb_state().algorithm, Algorithm::DiffuseV1);

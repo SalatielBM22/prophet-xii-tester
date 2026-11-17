@@ -1,7 +1,7 @@
 //! Worker-only native preset codec. Payload CRC is over compact, typed JSON
 //! in declaration order. Unknown sound fields or revisions reject the recall.
 use prophet_control::{
-    music::{Kind, Pattern, PatternBank, Step},
+    music::{Arpeggiator, Kind, NoteScheduler, Order, Pattern, PatternBank, Step},
     state::SoundState,
 };
 use prophet_dsp::{
@@ -20,11 +20,47 @@ pub enum Error {
     Algorithm,
     Pattern,
 }
+/// Persistent musical controls. Sounding keys and transport frame are transient.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Performance {
+    pub tempo_milli: u32,
+    pub swing: u8,
+    pub pattern: u8,
+    pub mode: u8,
+    pub octaves: u8,
+    pub latch: bool,
+    pub seed: u32,
+}
+impl Performance {
+    pub fn prepare(self, rate: u32) -> Result<(NoteScheduler, Arpeggiator), Error> {
+        let clock =
+            NoteScheduler::new(rate, self.tempo_milli, self.swing).map_err(|_| Error::Pattern)?;
+        let mut arp = Arpeggiator::default();
+        arp.order = *[
+            Order::Up,
+            Order::Down,
+            Order::UpDown,
+            Order::AsPlayed,
+            Order::Random,
+            Order::Chord,
+        ]
+        .get(self.mode as usize)
+        .ok_or(Error::Pattern)?;
+        if self.pattern >= 64 || !arp.set_octaves(self.octaves) {
+            return Err(Error::Pattern);
+        }
+        arp.set_latch(self.latch);
+        arp.seed = self.seed;
+        Ok((clock, arp))
+    }
+}
 pub struct Preset {
     pub name: String,
     pub category: String,
     pub sound: SoundState,
     pub bank: Option<Box<PatternBank>>,
+    pub performance: Option<Performance>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +90,8 @@ struct Payload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     modulation: Option<[[f32; 2]; 3]>,
     patterns: Option<Vec<(u8, [[u8; 7]; 32])>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    performance: Option<Performance>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,6 +129,9 @@ impl Preset {
         self.sound.validate().map_err(|_| Error::Parameters)?;
         let s = &self.sound;
         let p = s.patch;
+        if let Some(v) = self.performance {
+            v.prepare(48000)?;
+        }
         let patterns = if let Some(bank) = &self.bank {
             let mut rows = Vec::with_capacity(64);
             for pattern in &bank.0 {
@@ -137,6 +178,7 @@ impl Preset {
             loop_held: p.loop_held,
             modulation: (p.modulation != [Point::default(); 3]).then(|| p.modulation.map(xy)),
             patterns,
+            performance: self.performance,
         };
         let crc32 = crc(&serde_json::to_vec(&payload).map_err(|_| Error::Json)?);
         let data = serde_json::to_vec(&Native {
@@ -171,6 +213,7 @@ impl Preset {
                 category: p.category,
                 sound: legacy(p.values)?,
                 bank: None,
+                performance: None,
             });
         }
         if header.version != 2 {
@@ -223,6 +266,9 @@ impl Preset {
         sound.kill_tail = p.kill_tail;
         sound.reverb_enabled = p.enabled;
         sound.validate().map_err(|_| Error::Parameters)?;
+        if let Some(v) = p.performance {
+            v.prepare(48000)?;
+        }
         let bank = if let Some(rows) = p.patterns {
             if rows.len() != 64 {
                 return Err(Error::Pattern);
@@ -268,6 +314,7 @@ impl Preset {
             category: p.category,
             sound,
             bank,
+            performance: p.performance,
         })
     }
 }
