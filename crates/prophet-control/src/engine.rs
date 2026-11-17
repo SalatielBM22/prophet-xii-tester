@@ -33,6 +33,89 @@ impl PreparedEngine {
         self.synth.kernel.voice_params.oscillator_patch
     }
 
+    /// Render an optional scheduler lane alongside ordered EnginePort commands.
+    /// Reserve a separate origin for this lane. Host commands win ties in time.
+    pub fn process_music(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        events: &[Command],
+        acks: &mut [Ack],
+        origin: u8,
+        music: &[crate::music::MusicEvent],
+        results: &mut [Status],
+    ) -> Result<(), PortError> {
+        use crate::music::Trigger;
+        validate_block(self.config, left.len(), right.len(), events, acks.len())?;
+        if origin as usize >= ORIGINS || events.iter().any(|e| e.origin == origin) {
+            return Err(PortError::Origin);
+        }
+        if music.len() > MAX_EVENTS - events.len() || results.len() < music.len() {
+            return Err(PortError::Capacity);
+        }
+        if music.iter().any(|e| e.offset as usize >= left.len())
+            || music.windows(2).any(|p| p[0].offset > p[1].offset)
+        {
+            return Err(PortError::Offset);
+        }
+        let (mut host, mut seq, mut pos) = (0, 0, 0);
+        while host < events.len() || seq < music.len() {
+            let h = events.get(host).map_or(u16::MAX, |e| e.offset);
+            let m = music.get(seq).map_or(u16::MAX, |e| e.offset);
+            let at = h.min(m) as usize;
+            self.render(&mut left[pos..at], &mut right[pos..at]);
+            pos = at;
+            if h <= m {
+                let e = events[host];
+                let status = self.apply(e);
+                acks[host] = Ack {
+                    origin: e.origin,
+                    serial: e.serial,
+                    status,
+                    revision: self.revision(),
+                };
+                host += 1;
+            } else {
+                results[seq] = match music[seq].trigger {
+                    Trigger::Release => {
+                        self.synth.release_source(origin, None);
+                        Status::Applied
+                    }
+                    Trigger::Note {
+                        key,
+                        velocity,
+                        glide,
+                    } => {
+                        if velocity == 0 || velocity > 127 || key > 127 {
+                            Status::Invalid
+                        } else {
+                            let stored = self.synth.ipc.params.get(ParamId::GlideTime);
+                            let original = self.synth.kernel.voice_params.glide_time_sec;
+                            self.synth.kernel.voice_params.glide_time_sec =
+                                if glide { stored } else { 0. };
+                            let status =
+                                self.synth
+                                    .midi_owned(origin, 0x90, key, velocity, u32::from(key));
+                            self.synth.kernel.voice_params.glide_time_sec = original;
+                            if status == Status::Applied {
+                                let allocator = &mut self.synth.kernel.allocator;
+                                for v in &mut allocator.voices {
+                                    if v.gate && v.note_age == allocator.event_counter {
+                                        v.step_glide = glide;
+                                    }
+                                }
+                            }
+                            status
+                        }
+                    }
+                };
+                seq += 1;
+            }
+        }
+        self.render(&mut left[pos..], &mut right[pos..]);
+        self.frames = self.frames.saturating_add(left.len() as u64);
+        Ok(())
+    }
     pub fn set_drive_makeup(&mut self, enabled: bool) {
         self.synth.kernel.voice_params.drive_makeup = enabled;
     }

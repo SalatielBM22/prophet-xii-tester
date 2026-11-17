@@ -212,6 +212,7 @@ pub struct ProphetVoice {
     /// Current portamento pitch in MIDI semitones (69.0 = A4 = 440 Hz)
     pub current_note_pitch: f32,
     pub target_note_pitch: f32,
+    pub step_glide: bool,
     pub glide_rate_semis_per_sample: f32,
 
     /// Unison detune offset in semitones & stereo pan override
@@ -274,6 +275,7 @@ impl ProphetVoice {
             note_age: 0,
             current_note_pitch: 60.0,
             target_note_pitch: 60.0,
+            step_glide: false,
             glide_rate_semis_per_sample: 100.0,
             unison_detune_semis: 0.0,
             unison_pan: trimpots.pan,
@@ -350,6 +352,7 @@ impl ProphetVoice {
         self.velocity = velocity.clamp(0.0, 1.0);
         self.gate = true;
         self.trajectory.restart();
+        self.step_glide=false;
         self.note_age = age;
         self.target_note_pitch = midi_note as f32;
 
@@ -399,7 +402,7 @@ impl ProphetVoice {
             self.unison_pan += (self.unison_target[1] - self.unison_pan) / remaining;
             self.unison_ramp -= 1;
         }
-        if params.glide_time_sec <= 0.0005 {
+        if !self.step_glide && params.glide_time_sec <= 0.0005 {
             self.current_note_pitch = self.target_note_pitch;
         }
         // Update Vintage Dispersion scaling on VCO and VCF tolerances
