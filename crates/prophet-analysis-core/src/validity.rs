@@ -49,6 +49,7 @@ pub fn measure<F: FnMut(f32) -> f32>(
     let mut impulse = Vec::with_capacity(n);
     let (mut energy, mut error, mut tail, mut prior, mut large_tail, mut autonomous) =
         (0., 0., 0., 0., 0., 0.);
+    let mut tail_sum = 0.;
     const EPS: f32 = 0.001;
     for i in 0..n {
         if i % 64 == 0 {
@@ -70,6 +71,7 @@ pub fn measure<F: FnMut(f32) -> f32>(
         error += (b / 4.0 - a).powi(2);
         if i >= n * 7 / 8 {
             tail += a * a;
+            tail_sum += a;
             large_tail += b * b;
             autonomous += z * z;
         } else if i >= n * 3 / 4 {
@@ -79,12 +81,14 @@ pub fn measure<F: FnMut(f32) -> f32>(
     }
     let scaling = (error / energy.max(1e-60)).sqrt();
     let tail_rms = (tail / (n / 8) as f64).sqrt();
-    let oscillating = tail_rms > 1e-6
+    let ac_energy = (tail - tail_sum * tail_sum / (n / 8) as f64).max(0.);
+    let oscillating = ac_energy > 0.01 * tail
+        && tail_rms > 1e-6
         && tail >= 0.8 * prior
         && (autonomous > 1e-10 || (0.8..1.25).contains(&(large_tail / tail)));
     let validity = if oscillating {
         Validity::SelfOscillating
-    } else if scaling > 0.02 {
+    } else if scaling > 0.02 || autonomous > 1e-10 {
         Validity::NonlinearOperatingPoint
     } else if tail * 8.0 > 1e-8 * energy {
         Validity::LongTail
@@ -122,7 +126,23 @@ mod tests {
         assert!((gain.points[0].db + 6.0206).abs() < 1e-4);
         assert_eq!(run(|x| x * x).validity, Validity::NonlinearOperatingPoint);
         assert_eq!(run(|_| f32::NAN).validity, Validity::NumericalFailure);
-        assert_eq!(run(|_| 1.0).validity, Validity::SelfOscillating);
+        assert_eq!(run(|_| 1.0).validity, Validity::NonlinearOperatingPoint);
+        let alternating = measure(
+            48000.,
+            &[100.],
+            4096,
+            || {
+                let mut sample = 0.1;
+                move |_| {
+                    sample = -sample;
+                    sample
+                }
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(alternating.validity, Validity::SelfOscillating);
+        assert!(alternating.points.is_empty());
         let locked = measure(
             48000.,
             &[100.],

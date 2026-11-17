@@ -269,8 +269,14 @@ fn calibrated_rt60_tracks_targets_across_48k_and_96k() {
             let corr = lr / (ll * rr).sqrt().max(1e-30);
             assert!(rel_err_20 < 0.03, "sr={sr} target={target} t20={t20}");
             assert!(rel_err_30 < 0.03, "sr={sr} target={target} t30={t30}");
-            assert!(r2_20 > 0.999 && r2_30 > 0.999, "sr={sr} target={target} r2=({r2_20},{r2_30})");
-            assert!(corr.abs() < 0.10, "sr={sr} target={target} stereo_corr={corr}");
+            assert!(
+                r2_20 > 0.999 && r2_30 > 0.999,
+                "sr={sr} target={target} r2=({r2_20},{r2_30})"
+            );
+            assert!(
+                corr.abs() < 0.10,
+                "sr={sr} target={target} stereo_corr={corr}"
+            );
 
             // Artistic default profile: smooth linear log decay and strictly monotonic vs target
             let mut r_art = SolarisCloudburstReverb::new(sr);
@@ -288,7 +294,10 @@ fn calibrated_rt60_tracks_targets_across_48k_and_96k() {
             }
             let (t20_art, r2_art) = schroeder_t20_t30_r2(&energy_art, sr as f64, -25.0, -5.0);
             assert!(r2_art > 0.998, "artistic R^2 too low: {r2_art}");
-            assert!(t20_art > prev_artistic, "artistic decay not monotonic: {t20_art} <= {prev_artistic}");
+            assert!(
+                t20_art > prev_artistic,
+                "artistic decay not monotonic: {t20_art} <= {prev_artistic}"
+            );
             prev_artistic = t20_art;
         }
     }
@@ -357,9 +366,18 @@ fn shimmer_octave_and_fifth_generate_expected_pitch_shifted_partials() {
         let fifth_659 = find_peak(&fifth, 620.0, 700.0).1;
         let fifth_at_880 = find_peak(&fifth, 840.0, 920.0).1;
 
-        assert!(oct_880 > oct_base_880 * 100.0 + 1e-6, "sr={sr} +12st failed: {oct_880} vs {oct_base_880}");
-        assert!(fifth_659 > fifth_base_659 * 100.0 + 1e-6, "sr={sr} +7st failed: {fifth_659} vs {fifth_base_659}");
-        assert!(oct_880 > fifth_at_880 * 4.0, "sr={sr} +12st vs +7st separation: {oct_880} vs {fifth_at_880}");
+        assert!(
+            oct_880 > oct_base_880 * 100.0 + 1e-6,
+            "sr={sr} +12st failed: {oct_880} vs {oct_base_880}"
+        );
+        assert!(
+            fifth_659 > fifth_base_659 * 100.0 + 1e-6,
+            "sr={sr} +7st failed: {fifth_659} vs {fifth_base_659}"
+        );
+        assert!(
+            oct_880 > fifth_at_880 * 4.0,
+            "sr={sr} +12st vs +7st separation: {oct_880} vs {fifth_at_880}"
+        );
     }
 }
 
@@ -394,9 +412,18 @@ fn vowel_formant_morph_selects_ae_iou_spectral_peaks() {
     let u_2290 = goertzel_power(&responses[4], sr as f64, 2290.0);
     let e_1840 = goertzel_power(&responses[1], sr as f64, 1840.0);
     let u_1840 = goertzel_power(&responses[4], sr as f64, 1840.0);
-    assert!(a_730 > i_730 * 3.0, "Vowel A F1(730) should exceed I: {a_730} vs {i_730}");
-    assert!(e_1840 > u_1840 * 3.0, "Vowel E F2(1840) should exceed U: {e_1840} vs {u_1840}");
-    assert!(i_2290 > u_2290 * 3.0, "Vowel I F2(2290) should exceed U: {i_2290} vs {u_2290}");
+    assert!(
+        a_730 > i_730 * 3.0,
+        "Vowel A F1(730) should exceed I: {a_730} vs {i_730}"
+    );
+    assert!(
+        e_1840 > u_1840 * 3.0,
+        "Vowel E F2(1840) should exceed U: {e_1840} vs {u_1840}"
+    );
+    assert!(
+        i_2290 > u_2290 * 3.0,
+        "Vowel I F2(2290) should exceed U: {i_2290} vs {u_2290}"
+    );
 
     // Ensure every adjacent vowel pair A/E/I/O/U produces a distinct spectrum across formant probes
     for v_idx in 0..4 {
@@ -406,7 +433,11 @@ fn vowel_formant_morph_selects_ae_iou_spectral_peaks() {
             let p1 = goertzel_power(&responses[v_idx + 1], sr as f64, probe_f);
             diff_sum += (p0 - p1).abs() / (p0 + p1 + 1e-12);
         }
-        assert!(diff_sum > 0.5, "Vowels {v_idx} and {} insufficiently distinct", v_idx + 1);
+        assert!(
+            diff_sum > 0.5,
+            "Vowels {v_idx} and {} insufficiently distinct",
+            v_idx + 1
+        );
     }
 }
 
@@ -461,12 +492,21 @@ fn ensemble_modes_differentiate_harmonics_and_stereo_spread() {
 
     let off_h = goertzel_power(&off_m, sr as f64, 440.0) + goertzel_power(&off_m, sr as f64, 660.0);
     let mp_h = goertzel_power(&mp_m, sr as f64, 440.0) + goertzel_power(&mp_m, sr as f64, 660.0);
-    let forte_h = goertzel_power(&forte_m, sr as f64, 440.0) + goertzel_power(&forte_m, sr as f64, 660.0);
+    let forte_h =
+        goertzel_power(&forte_m, sr as f64, 440.0) + goertzel_power(&forte_m, sr as f64, 660.0);
 
-    assert!(mp_h > off_h + 1e-6 && forte_h > mp_h * 1.15, "harmonic progression failed: off={off_h} mp={mp_h} forte={forte_h}");
-    assert!(forte_e > mp_e && mp_e > off_e && off_e > 0.0, "energy progression failed: off={off_e} mp={mp_e} forte={forte_e}");
     assert!(
-        mp_corr.abs() < off_corr.abs() && forte_corr.abs() < off_corr.abs() && forte_corr.abs() < 0.85,
+        mp_h > off_h + 1e-6 && forte_h > mp_h * 1.15,
+        "harmonic progression failed: off={off_h} mp={mp_h} forte={forte_h}"
+    );
+    assert!(
+        forte_e > mp_e && mp_e > off_e && off_e > 0.0,
+        "energy progression failed: off={off_e} mp={mp_e} forte={forte_e}"
+    );
+    assert!(
+        mp_corr.abs() < off_corr.abs()
+            && forte_corr.abs() < off_corr.abs()
+            && forte_corr.abs() < 0.85,
         "sine ensemble decorrelation failed: off={off_corr} mp={mp_corr} forte={forte_corr}"
     );
 
@@ -518,7 +558,12 @@ fn ten_second_freeze_stays_flat_finite_and_decorrelated() {
             let mut slice = 0.0f64;
             for _ in 0..sec {
                 let (l, right) = r.process_stereo(0.0, 0.0, &p);
-                assert!(l.is_finite() && right.is_finite() && !l.is_subnormal() && !right.is_subnormal());
+                assert!(
+                    l.is_finite()
+                        && right.is_finite()
+                        && !l.is_subnormal()
+                        && !right.is_subnormal()
+                );
                 let (lf, rf) = (l as f64, right as f64);
                 slice += lf * lf + rf * rf;
                 lr += lf * rf;
@@ -540,3 +585,44 @@ fn ten_second_freeze_stays_flat_finite_and_decorrelated() {
     }
 }
 
+#[test]
+fn diffuse_freeze_kill_and_idle_selection() {
+    use prophet_dsp::fx::reverb::{Algorithm, ReverbPort, ReverbSlot};
+    for sr in [44100., 48000., 96000.] {
+        let mut r = ReverbSlot::new(sr);
+        assert_eq!(r.algorithm(), Algorithm::LegacyRC1);
+        assert!(r.select_idle(Algorithm::DiffuseV1));
+        let mut p = SolarisReverbParams {
+            pre_delay_ms: 0.,
+            decay_sec: 20.,
+            wet_mix: 1.,
+            ensemble_mode: EnsembleMode::Forte,
+            ensemble_blend: 1.,
+            shimmer_amount: 1.,
+            ..Default::default()
+        };
+        let mut tail = 0.;
+        for i in 0..(sr as usize * 2) {
+            if i == sr as usize / 4 {
+                p.freeze = true;
+            }
+            let x = if i < 100 { 0.25 } else { 0. };
+            let (l, rr) = r.process_stereo(x, -0.7 * x, &p);
+            assert!(l.is_finite() && rr.is_finite());
+            if i >= sr as usize {
+                tail += l * l + rr * rr;
+            }
+        }
+        assert!(tail > 0.);
+        assert!(!r.select_idle(Algorithm::LegacyRC1));
+        assert!(r.state(&p).frozen);
+        p.freeze = false;
+        p.enabled = false;
+        p.bypass_tail = ReverbTailPolicy::Kill;
+        for _ in 0..sr as usize / 20 {
+            r.process_stereo(0., 0., &p);
+        }
+        assert!(r.state(&p).dormant);
+        assert!(r.select_idle(Algorithm::LegacyRC1));
+    }
+}
