@@ -74,3 +74,48 @@ impl ExtraOscillators {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// With a coherent increment of 151/512, only the fundamental is fully
+    /// enabled by the table crossover. Check the FFT-bin projections for C/D.
+    #[test]
+    fn near_nyquist_tables_do_not_fold_upper_partials() {
+        const N: usize = 512;
+        let bin = 151;
+        for family in 0..2 {
+            let dt = bin as f32 / N as f32;
+            let samples: [f32; N] =
+                std::array::from_fn(|i| wave(family, ((i * bin) % N) as f32 / N as f32, dt));
+            let level = |k: usize| {
+                let mut re = 0.;
+                let mut im = 0.;
+                for (i, &x) in samples.iter().enumerate() {
+                    let (s, c) = (std::f64::consts::TAU * (k * i) as f64 / N as f64).sin_cos();
+                    re += x as f64 * c;
+                    im += x as f64 * s;
+                }
+                2. * re.hypot(im) / N as f64
+            };
+            assert!((level(bin) - 0.55).abs() < 1e-6);
+            assert!((0..=N / 2).filter(|&k| k != bin).all(|k| level(k) < 1e-6));
+        }
+    }
+    #[test]
+    fn pitch_band_changes_are_continuous_at_all_table_boundaries() {
+        for family in 0..2 {
+            for level in 1..=5 {
+                for i in 0..512 {
+                    let dt = 0.49 / (1 << level) as f32;
+                    let phase = i as f32 / 512.;
+                    assert!(
+                        (wave(family, phase, dt * 0.99999) - wave(family, phase, dt * 1.00001))
+                            .abs()
+                            < 2e-5
+                    );
+                }
+            }
+        }
+    }
+}
