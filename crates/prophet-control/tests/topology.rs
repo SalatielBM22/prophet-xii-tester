@@ -117,3 +117,46 @@ fn diamond_geometry_and_voice_trajectory() {
     }
     assert_eq!(t.advance(&patch, 8000.), [0., 0., 0., 1.]);
 }
+
+#[test]
+fn per_note_pressure_moves_only_its_trajectory() {
+    let mut e = PreparedEngine::prepare(Prepare {
+        sample_rate: 48000,
+        max_frames: 480,
+        oversampling: 1,
+    })
+    .unwrap();
+    let mut patch = Patch {
+        topology: Topology::Vector4,
+        ..Default::default()
+    };
+    patch.modulation[1].x = 1.;
+    e.set_patch(patch).unwrap();
+    let mut l = [0.; 480];
+    let mut r = l;
+    let mut events = vec![];
+    for (i, (status, key, vel)) in [(0x91, 60, 90), (0x92, 65, 90), (0xd1, 127, 0)]
+        .into_iter()
+        .enumerate()
+    {
+        events.push(Command {
+            origin: 1,
+            serial: i as u32 + 1,
+            offset: 0,
+            action: Action::Midi {
+                status,
+                data1: key,
+                data2: vel,
+                note_id: key as u32,
+            },
+        });
+    }
+    for _ in 0..5 {
+        e.process(&mut l, &mut r, &events, &mut [Ack::default(); 3])
+            .unwrap();
+        events.clear();
+    }
+    let weights = e.vector_weights();
+    assert!(weights[0].unwrap()[2] > 0.999);
+    assert_eq!(weights[1], Some([0.25; 4]));
+}

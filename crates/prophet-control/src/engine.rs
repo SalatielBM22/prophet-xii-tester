@@ -29,6 +29,15 @@ impl PreparedEngine {
         self.synth.kernel.voice_params.oscillator_patch = patch;
         Ok(())
     }
+    pub fn vector_weights(&self) -> [Option<[f32; 4]>; 12] {
+        let active = self.patch().topology == Topology::Vector4;
+        self.synth
+            .kernel
+            .allocator
+            .voices
+            .each_ref()
+            .map(|v| (active && v.is_active()).then(|| v.vector_weights()))
+    }
     pub fn patch(&self) -> Patch {
         self.synth.kernel.voice_params.oscillator_patch
     }

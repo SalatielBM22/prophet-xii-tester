@@ -70,6 +70,8 @@ pub struct Patch {
     pub routes: [Route; 2],
     pub ratios: [f32; 2],
     pub position: Point,
+    /// XY displacement at full velocity, pressure and bipolar LFO, respectively.
+    pub modulation: [Point; 3],
     pub stages: [Stage; 5],
     pub loop_held: bool,
 }
@@ -80,6 +82,7 @@ impl Default for Patch {
             routes: [Route::Sum; 2],
             ratios: [0.5, 1.5],
             position: Point::default(),
+            modulation: [Point::default(); 3],
             stages: [Stage::default(); 5],
             loop_held: false,
         }
@@ -88,6 +91,7 @@ impl Default for Patch {
 impl Patch {
     pub fn valid(&self) -> bool {
         self.position.valid()
+            && self.modulation.iter().all(|p| p.valid())
             && self.stages.iter().all(|s| s.target.valid() && s.millis > 0)
             && self.ratios.iter().all(|v| (0.0625..=16.).contains(v))
     }
@@ -114,6 +118,12 @@ impl Trajectory {
         }
     }
     pub fn advance(&mut self, patch: &Patch, rate: f32) -> [f32; 4] {
+        self.advance_modulated(patch, rate, [0.; 3])
+    }
+    pub fn weights(&self) -> [f32; 4] {
+        self.pos.plus(self.joystick).weights()
+    }
+    pub fn advance_modulated(&mut self, patch: &Patch, rate: f32, inputs: [f32; 3]) -> [f32; 4] {
         if !self.finished {
             let stage = patch.stages[self.index];
             if self.left == 0 {
@@ -130,8 +140,13 @@ impl Trajectory {
                 }
             }
         }
+        let mut offset = Point::default();
+        for (depth, value) in patch.modulation.iter().zip(inputs) {
+            offset.x += depth.x * value;
+            offset.y += depth.y * value;
+        }
         self.joystick
-            .towards(patch.position, 1. / (0.005 * rate).max(1.));
-        self.pos.plus(self.joystick).weights()
+            .towards(patch.position.plus(offset), 1. / (0.005 * rate).max(1.));
+        self.weights()
     }
 }

@@ -28,6 +28,7 @@ fn checksum_and_vector_pattern_roundtrip() {
     let mut p = Preset::decode(include_bytes!("../../../presets/00-factory.json")).unwrap();
     p.sound.patch.topology = Topology::Vector4;
     p.sound.patch.routes[1] = Route::Sync;
+    p.sound.patch.modulation[1].x = 0.75;
     p.sound.algorithm = Algorithm::DiffuseV1;
     p.sound.glide = false;
     let mut bank = Box::<PatternBank>::default();

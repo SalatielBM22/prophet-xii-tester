@@ -51,6 +51,8 @@ struct Payload {
     xy: [f32; 2],
     stages: [([f32; 2], u16); 5],
     loop_held: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    modulation: Option<[[f32; 2]; 3]>,
     patterns: Option<Vec<(u8, [[u8; 7]; 32])>>,
 }
 #[derive(Deserialize)]
@@ -133,6 +135,7 @@ impl Preset {
             xy: xy(p.position),
             stages: p.stages.map(|s| (xy(s.target), s.millis)),
             loop_held: p.loop_held,
+            modulation: (p.modulation != [Point::default(); 3]).then(|| p.modulation.map(xy)),
             patterns,
         };
         let crc32 = crc(&serde_json::to_vec(&payload).map_err(|_| Error::Json)?);
@@ -208,6 +211,7 @@ impl Preset {
             routes: [route(p.routes[0])?, route(p.routes[1])?],
             ratios: p.ratios,
             position: point(p.xy),
+            modulation: p.modulation.unwrap_or_default().map(point),
             stages: p.stages.map(|(pos, millis)| Stage {
                 target: point(pos),
                 millis,

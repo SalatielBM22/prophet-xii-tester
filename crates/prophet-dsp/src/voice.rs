@@ -352,7 +352,7 @@ impl ProphetVoice {
         self.velocity = velocity.clamp(0.0, 1.0);
         self.gate = true;
         self.trajectory.restart();
-        self.step_glide=false;
+        self.step_glide = false;
         self.note_age = age;
         self.target_note_pitch = midi_note as f32;
 
@@ -379,6 +379,10 @@ impl ProphetVoice {
     }
 
     #[inline(always)]
+    pub fn vector_weights(&self) -> [f32; 4] {
+        self.trajectory.weights()
+    }
+
     pub fn trigger_note_off(&mut self) {
         self.gate = false;
         self.trajectory.release();
@@ -577,7 +581,15 @@ impl ProphetVoice {
 
         let patch = &params.oscillator_patch;
         let weights = if patch.topology == crate::vector::Topology::Vector4 {
-            self.trajectory.advance(patch, self.base_sample_rate)
+            self.trajectory.advance_modulated(
+                patch,
+                self.base_sample_rate,
+                [
+                    self.velocity,
+                    (self.mpe_pressure + params.aftertouch).clamp(0., 1.),
+                    lfo_mod_signal.clamp(-1., 1.),
+                ],
+            )
         } else {
             [0.; 4]
         };
