@@ -422,14 +422,14 @@ pub enum UiCommand {
         status: u8,
         data1: u8,
         data2: u8,
-        #[serde(default)]
+        #[serde(default, alias = "noteId")]
         note_id: Option<u32>,
     },
     /// Vector4 XY point inside diamond `|x| + |y| <= 1`.
     VectorXY { x: f32, y: f32 },
     /// Release notes held by local UI (or all origins if `all_origins` is true).
     Panic {
-        #[serde(default)]
+        #[serde(default, alias = "allOrigins")]
         all_origins: bool,
     },
     /// Load one of the 10 immutable factory presets off-audio and swap safely.
@@ -447,6 +447,7 @@ pub enum UiCommand {
         ratios: [f32; 2],
         stages: [UiStage; 5],
         modulation: [UiPoint; 3],
+        #[serde(alias = "loopHeld")]
         loop_held: bool,
     },
     /// Configure reverb algorithm (`LegacyRC1 | DiffuseV1`, idle-only switch) and tail policy.
@@ -463,7 +464,7 @@ pub enum UiCommand {
     /// MIDI Learn lifecycle backed by `CcLearnRouter`.
     MidiLearn {
         action: String,
-        #[serde(default)]
+        #[serde(default, alias = "paramId")]
         param_id: Option<u16>,
         #[serde(default)]
         cc: Option<u8>,
@@ -475,34 +476,34 @@ pub enum UiCommand {
         op: String,
         #[serde(default)]
         pattern: Option<u8>,
-        #[serde(default)]
+        #[serde(default, alias = "patternLen")]
         pattern_len: Option<u8>,
-        #[serde(default)]
+        #[serde(default, alias = "stepIndex")]
         step_index: Option<u8>,
         #[serde(default)]
         step: Option<UiStep>,
-        #[serde(default)]
+        #[serde(default, alias = "tempoMilli")]
         tempo_milli: Option<u32>,
         #[serde(default)]
         swing: Option<u8>,
-        #[serde(default)]
+        #[serde(default, alias = "arpEnabled")]
         arp_enabled: Option<bool>,
-        #[serde(default)]
+        #[serde(default, alias = "arpOrder")]
         arp_order: Option<UiArpOrder>,
-        #[serde(default)]
+        #[serde(default, alias = "arpOctaves")]
         arp_octaves: Option<u8>,
-        #[serde(default)]
+        #[serde(default, alias = "arpLatch")]
         arp_latch: Option<bool>,
-        #[serde(default)]
+        #[serde(default, alias = "arpSeed")]
         arp_seed: Option<u32>,
-        #[serde(default)]
+        #[serde(default, alias = "gridStep")]
         grid_step: Option<u32>,
         #[serde(default)]
         frame: Option<u64>,
     },
     /// Request bounded off-thread VCF analysis backed by `prophet_analysis_core::validity::measure`.
     AnalyzeFilter {
-        #[serde(default)]
+        #[serde(default, alias = "sampleRate")]
         sample_rate: Option<f64>,
     },
     /// Host platform audio/device/developer controls (start/stop/reconnect/dev-bridge/device-select).
@@ -512,11 +513,11 @@ pub enum UiCommand {
         enabled: Option<bool>,
         #[serde(default)]
         device: Option<String>,
-        #[serde(default)]
+        #[serde(default, alias = "sampleRate")]
         sample_rate: Option<u32>,
-        #[serde(default)]
+        #[serde(default, alias = "bufferFrames")]
         buffer_frames: Option<u32>,
-        #[serde(default)]
+        #[serde(default, alias = "midiPort")]
         midi_port: Option<String>,
     },
 }

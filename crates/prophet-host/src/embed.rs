@@ -105,7 +105,7 @@ pub fn native_bridge_bootstrap_script(backend_tag: &str, mode: BridgeTransportMo
     setZoom: function(z) {{
       latestZoom = Number(z) || 1.0;
       document.documentElement.style.zoom = String(latestZoom);
-      sendRaw({{ type: "hostControl", op: "setUiZoom", bufferFrames: Math.round(latestZoom * 100) }}, 0);
+      sendRaw({{ type: "hostControl", op: "setUiZoom", buffer_frames: Math.round(latestZoom * 100) }}, 0);
     }},
     getZoom: function() {{ return latestZoom; }}
   }};

@@ -1019,6 +1019,23 @@ impl HostControlPlane {
                     ),
                 }
             }
+            UiCommand::HostControl { op, .. } if op == "getFactoryPresets" => {
+                let list: Vec<serde_json::Value> = preset::factory_presets()
+                    .into_iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "id": p.id,
+                            "name": p.name,
+                            "category": p.category,
+                            "glide": p.glide,
+                            "values": p.values.as_slice(),
+                        })
+                    })
+                    .collect();
+                let mut reply = UiCommandReply::ok("Confirmed factory preset values");
+                reply.data = Some(serde_json::json!({ "presets": list }));
+                reply
+            }
             UiCommand::HostControl { op, .. } => UiCommandReply::err(
                 Some(Status::Unsupported),
                 format!("HostControl '{op}' must be handled by the platform host adapter"),
@@ -1175,6 +1192,12 @@ impl HostControlPlane {
                 self.emit_notice(true, "factoryPreset", format!("Loaded factory preset: {}", p.name));
                 let mut reply = UiCommandReply::ok(format!("Loaded factory preset {}", p.name));
                 reply.swap_id = Some(swap_id);
+                reply.data = Some(serde_json::json!({
+                    "id": index,
+                    "name": p.name,
+                    "values": self.sound.values.as_slice(),
+                    "glide": self.sound.glide,
+                }));
                 reply
             }
             Err(st) => UiCommandReply::err(Some(st), "Failed to prepare factory preset"),
