@@ -54,6 +54,16 @@
 - **Blind Objective Acoustic Preference:** **Slight preference for `B.wav`** for late diffuse tail quality. In the isolated decay tail (`2.6–4.8 s`), `B.wav` exhibits measurably stronger stereo decorrelation (`0.1914` vs `0.3294`), a wider side-to-mid image (`-1.66 dB` vs `-2.81 dB`), `+31%` to `+33%` higher spectral flatness, `-2.93 dB` lower deep-tail modal peak prominence, and lower `15–80 ms` periodic comb autocorrelation (`0.6167` vs `0.6954`).
 - **Release Default Recommendation:** Keep `LegacyRC1` as the conservative default and expose `DiffuseV1` as opt-in experimental (`DiffuseV1 (Exp)` in UI) because physical human golden-ear studio listening is `NOT_TESTED` in this environment and `LegacyRC1` preserves bit-level RC1 backwards compatibility.
 
+### 1.5 Unblinded Mapping (Appended AFTER Blind Commit `605355d`)
+Opened `docs/wo-a/evidence/listening/key.json` strictly after sealing Sections 1.1–1.4 in commit `605355d`:
+
+| Blind Label | Unblinded Algorithm | Reported LUFS (`key.json`) | Key Objective Tradeoff Observed Blind |
+|---|---|---:|---|
+| **`A.wav`** | **`DiffuseV1`** | `-23.00 LUFS` | Longer tail energy (`+1.85 dB` at `2.6–4.8 s`), higher `T30` exponential linearity (`R² = 0.9974` vs `0.9939`), but higher L/R correlation (`0.3294` vs `0.1914`) and slightly lower spectral flatness in the pure tail. |
+| **`B.wav`** | **`LegacyRC1`** | `-22.99 LUFS` | **Blind objective acoustic winner** on pure-tail stereo decorrelation (`0.1914`), side-to-mid width (`-1.66 dB`), spectral flatness (`+31–33%`), deep-tail modal smoothness (`-2.93 dB`), and lower `15–80 ms` comb autocorrelation (`0.6167`). |
+
+- **Engineering Decision Confirmed:** Unblinding directly reinforces keeping **`LegacyRC1`** as the default reverb algorithm and labeling **`DiffuseV1`** explicitly as **`DiffuseV1 (Exp)`** (opt-in experimental). Physical human studio monitor evaluation remains `NOT_TESTED` and is required before ever considering `DiffuseV1` as default.
+
 ---
 
 ## 2. Cross-Platform RT Audio & Host Benchmark Matrix
