@@ -1,32 +1,22 @@
-# Matriz de continuidade
+# Matriz de implementação e qualificação de A
 
-| Gate da ordem A | Estado | Evidência e trabalho restante |
+Candidato `1f655c92f60a6a6124e7459014447f51f7d21517`. O SHA por linha identifica a implementação ou o ensaio decisivo. Os CSVs correspondem às condições de [BENCHMARKS.md](BENCHMARKS.md). As 15 issues do fork estavam abertas durante a retomada.
+
+| Issue | Gate de A | Evidência e limite |
 |---|---|---|
-| G0 RC1 e contrato | PASS / PROVEN / HOST_VERIFIED | RC1 `2978fdc02c85aa413dc76cc468cebb05f5cecc2a` verificada no fork. 37 testes de referência. Contrato publicado em `995d772d7371480900fe74def6bb3c60674abddc`. Aceite do Gemini B permanece OPEN. |
-| G1 RC2 P0 | PARTIAL / PROVEN / HOST_VERIFIED | Glide 83 funciona sem renumerar 0–82. Unison aplica contagem e rampas nos membros retidos. Note ledger, sustain/sostenuto, ACKs e replay com testes. FloatBus e compensação opcional de Drive implementados. Classificador VCF tem testes sintéticos. Faltam matriz de taxas e blocos, sinais adversariais, teste do ponto 27,51 Hz / res 1 / drive 1,1 / morph 0,35, A/B Drive com RMS/peak/true-peak/THD/IMD, análise de alias e verificação física. |
-| G2 núcleo reutilizável | PARTIAL / PROVEN / HOST_VERIFIED | `PreparedEngine` e extração sem alteração aritmética do FIR para o rlib `no_std`. Builds em x86_64 Linux, AArch64 Linux e AArch64 Android. Portar os demais módulos progressivamente, medir domínio de memória e obter paridade em cada etapa. |
-| G3 reverb | PARTIAL / PROVEN / HOST_VERIFIED | `ReverbPort`, `LegacyRC1`, `DiffuseV1` com seleção apenas em tanque ocioso. Paridade LegacyRC1 nos renders fixados. Faltam testes e métricas próprios de DiffuseV1 e integração de seleção/tail/state via EnginePort. |
-| G4 Classic2/Extended3/Extended4/Vector4 | BLOCKED / OPEN / NOT_TESTED | Implementação de topologias novas pendente no checkpoint. Classic2 passou comparação de WAV. Manter A+B original, adicionar C/D sem duplicar o VCF/VCA. Definir rotas tipadas áudio/FM/PM/sync/ring sem dependências cíclicas, fontes próprias banda-limitadas e envelopes XY de cinco estágios por voz. Validar pesos do diamante, suavização, loudness, alias, continuidade e 12 vozes em 48/96 kHz a 1x/2x/4x. |
-| G5 sequenciador, arpejo e presets | BLOCKED / OPEN / NOT_TESTED | Contrato de IDs/migração proposto. Implementar relógio Rust e fila fixa, 32 passos em páginas de oito, 64 padrões, gate, ratchet, rests, ties, acento e glide por passo, busca/loop/stop e independência das fontes. Arpejo Up/Down/As-played/Random com seed e demais modos da issue #8. Implementar codec versionado, algoritmo/revisão, checksum, validação antes de aplicar e migração RC1, sem importadores proprietários. |
-| G6 qualificação e integração | PARTIAL / OPEN / HOST_VERIFIED | Evidência de regressão de host e checkpoint publicado. Faltam matriz RT, alocações por callback, deadline e dispositivos. B coordena integração em branch separado. |
+| #1 Glide e MIDI | PASS · PROVEN · HOST_VERIFIED para o núcleo nas condições ensaiadas | `fa4a821`, `57997a6`; testes `live_unison`, `events` e `port`. As duas leis chegaram à posição prevista a meio percurso em 44,1/48/96 kHz (tolerância 0,02 semitom). Desligar o glide atuou no próximo frame. Replay, sobreposição por origem, pedais e bordas de bloco verificados. CASIO e UI de B continuam OPEN. |
+| #2 VCF | PASS · PROVEN · HOST_VERIFIED para o ponto reportado | `402831c`, `84275c5`; [vcf.csv](evidence/vcf.csv). Em seis medições houve LongTail e zero pontos. Casos sintéticos separam DC persistente, oscilação autônoma, não linearidade e falha numérica. A curva em regime linear tem oracle analítico nos testes de modelo. A classe fora do domínio testado é heurística. |
+| #3 Drive | PARTIAL · PROVEN · HOST_VERIFIED | `3314c68`; [drive.csv](evidence/drive.csv). Curtis/Moog, três taxas, três fatores, três drives, três sinais, com/sem ganho pós-VCF. A compensação aumenta os picos na proporção do ganho e fica opcional. A política de loudness para produção e a aceitação auditiva seguem OPEN. |
+| #4 integridade e deadline | FAILED · PROVEN · HOST_VERIFIED para o critério de zero perdas | `3314c68`; [timing.csv](evidence/timing.csv). 34/13.824 blocos excederam o orçamento. Os 11 WAVs da API legada coincidiram entre a RC1, o checkpoint e o candidato. Latência acústica e comportamento do driver continuam OPEN. |
+| #5 UI | BLOCKED · OPEN · NOT_TESTED | Propriedade B. |
+| #6 Ensemble/Shimmer | PARTIAL · PROVEN · HOST_VERIFIED | `402831c`, `3314c68`; [reverb.csv](evidence/reverb.csv). Decaimento estéreo em três taxas, freeze, recusa de troca com cauda e bypass/kill testados. Escuta humana das amostras A/B e avaliação espectral de toda a faixa de transposição continuam OPEN. |
+| #7 presets | PASS · PROVEN · HOST_VERIFIED para codec/recall Rust | `65aa867`, `1f655c9`; `prophet-preset/tests/recall.rs`. Os dez JSONs RC1 migraram nas três taxas. CRC, truncamento, rotas, etapas, último passo do padrão 64 e estado do arpejador têm roundtrip. Projeto real de plugin e browser de presets dependem de B. |
+| #8 clock/arpejo | PARTIAL · PROVEN · HOST_VERIFIED | `d77348f`, `bb99086`, `1f655c9`; `prophet-control/tests/music.rs`. Grade determinística, swing, ratchets, tie, acorde, seed, origem separada, loop, retiming e stop. A comparação de partições cobriu 10 s por taxa. Soak longo de DAW, gravação e gestos de UI OPEN. |
+| #9 Unison | PASS · PROVEN · HOST_VERIFIED para as transições medidas | `fa4a821`, `31467d8`; pressão da nota mantida com pedal, expansão da pilha e retorno a poly com a mesma tecla em dois canais. [unison.csv](evidence/unison.csv) mede 27 transições editadas contra o mesmo áudio sem edição. Audibilidade física OPEN. |
+| #10 osciladores/rotas | PARTIAL · PROVEN · HOST_VERIFIED | `cde2c9e`; `topology.rs`, [timing.csv](evidence/timing.csv). Extended3/4 compartilham o VCF/VCA da voz. Soma, FM, PM, sync e ring produziram saídas distintas. O custo é dependente da configuração. Limites espectrais de cada rota modulada e promoção OPEN. |
+| #11 Vector4 | PARTIAL · PROVEN · HOST_VERIFIED | `3d47cee`, `919aa9b`. Pesos do diamante, trajetórias, modulação por voz, continuidade nas trocas de bandas e projeções espectrais de C/D; pressão de um canal não move a outra voz. Deadline geral falhou, UX e validação em dispositivo OPEN. |
+| #12 porta de reverb | PASS · PROVEN · HOST_VERIFIED para seleção ociosa e recall Rust | `65aa867`, `402831c`. LegacyRC1 padrão e render idêntico, DiffuseV1 explícito, estado e versão consultáveis, 14 testes de reverb em release. Seleção com cauda ativa retorna Unsupported. |
+| #13 extração portátil | PARTIAL · PROVEN · HOST_VERIFIED | `39db15f`, `cde2c9e`, `bb99086`. Rlib no_std com FIR, BLEP/BLAMP, ruído, geometria/tempo vetorial, port e scheduler, compilado para três alvos. VCF, tanque e preparação completa ainda usam std. |
+| #14 e #15 plugins, standalone e Android | BLOCKED · OPEN · NOT_TESTED em dispositivo | Propriedade B. O check do workspace Linux e os cross-builds do rlib não exercitam dispositivos. |
 
-## Issues do fork
-
-Todas as 15 issues apareciam abertas na lista GitHub consultada. Os estados abaixo classificam a entrega A e sua evidência local.
-
-| Issue | Estado | Evidência |
-|---|---|---|
-| #1 Glide/MIDI | PARTIAL · PROVEN · HOST_VERIFIED | `3c916e2`, testes `events` e `port`. CASIO, caminhos reais e geometria ficam com B. |
-| #2 validade VCF | PARTIAL · PROVEN · HOST_VERIFIED | `2eb7ebc`, `validity::tests::known_gain_and_invalid_regimes`. Falta reproduzir o ponto reportado, oracle independente e adaptador do host. |
-| #3 Drive/headroom | PARTIAL · PROVEN · SOURCE_INSPECTED | `2eb7ebc`, opções de ganho no código. Falta caracterização para decidir a política de produção. |
-| #4 integridade numérica | PARTIAL · PROVEN · HOST_VERIFIED | Testes e renders registrados em [BENCHMARKS.md](BENCHMARKS.md). Matriz DAW/alias/RT OPEN. |
-| #5 React | BLOCKED · OPEN · NOT_TESTED | Escopo B. |
-| #6 Ensemble/Shimmer | PARTIAL · PROVEN · SOURCE_INSPECTED | `f186ea1`, perfil DiffuseV1 experimental. Ensaios próprios OPEN. |
-| #7 presets | PARTIAL · OPEN · SOURCE_INSPECTED | Migração descrita em [CONTROL_STATE_SCHEMA.md](CONTROL_STATE_SCHEMA.md). Codec e recall pendentes. |
-| #8 sequenciador/arpejo | BLOCKED · OPEN · NOT_TESTED | Implementação suspensa antes deste gate. |
-| #9 Unison | PARTIAL · PROVEN · HOST_VERIFIED | Teste red em `03a58bf`, green em `3c916e2`. Medir clicks e interações de transformação de pilha com MPE. |
-| #10 roteamento VCO | BLOCKED · OPEN · NOT_TESTED | Implementação suspensa antes deste gate. |
-| #11 Vector4 | BLOCKED · OPEN · NOT_TESTED | Contrato XY presente. Implementação suspensa antes deste gate. |
-| #12 portas de reverb | PARTIAL · PROVEN · HOST_VERIFIED | `f186ea1`, paridade dos renders 48 kHz e 13 testes Legacy. |
-| #13 no_std | PARTIAL · PROVEN · HOST_VERIFIED | `995d772`, `2eb7ebc`, build do rlib nos três alvos. Restante do DSP ainda usa std. |
-| #14/15 hosts, plugins e Android | BLOCKED · OPEN · NOT_TESTED | Escopo B. Build do rlib para Android não representa execução de AAudio. |
+O gate G0 de preservação passou. G1 cobre as correções de controle com caracterização parcial de Drive; G2–G5 têm implementações consumíveis e as pendências acima. G6 falhou no critério temporal desta máquina. O aceite dos adaptadores de B continua OPEN. [Handoff e contrato para B](CONTRACT_HANDOFF.md).

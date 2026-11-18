@@ -1,0 +1,10 @@
+{
+  "A": {
+    "algorithm": "DiffuseV1",
+    "LUFS": -23.0
+  },
+  "B": {
+    "algorithm": "LegacyRC1",
+    "LUFS": -22.99
+  }
+}
