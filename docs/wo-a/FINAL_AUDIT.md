@@ -1,22 +1,21 @@
-# Auditoria do checkpoint para migração de ambiente
+# Auditoria do candidato A
 
-Estado geral **PARTIAL**. A implementação foi pausada a pedido do proprietário para preservar o trabalho e permitir a retomada em outra máquina. Incidente relatado e roteiro em [CLOUD_RESUME.md](CLOUD_RESUME.md). A autoridade para publicação abrange o branch `feat/dual-xhigh-core-dsp-vector` no fork `SalatielBM22/prophet-xii-tester`.
+**Estado geral PARTIAL.** O candidato está disponível para integração experimental no fork. Classic2 e LegacyRC1 permanecem os padrões. O critério de zero perdas de prazo falhou na máquina Cloud. A promoção das topologias e do algoritmo de reverb depende dos gates abertos na [matriz por issue](IMPLEMENTATION_MATRIX.md).
 
-| Ponto | SHA |
+| Identidade verificada | SHA |
 |---|---|
 | RC1 | `2978fdc02c85aa413dc76cc468cebb05f5cecc2a` |
-| Contrato inicial | `995d772d7371480900fe74def6bb3c60674abddc` |
-| Teste red Unison | `03a58bf483fb695b7380d7481c517f8a0e7ba5f1` |
-| Controle, MIDI, Glide e Unison | `3c916e220e6efb533bc9bcecba5215477acd71d7` |
-| FIR no_std, análise de validade e políticas de ganho | `2eb7ebcade6ceebe639815dc49dde4bf22267da9` |
-| Código do checkpoint e rack FX | `f186ea10d752092d1d0b8ebc7c44226398f7d124` |
+| Contrato EnginePort v1 / MIDI / estado | `995d772d7371480900fe74def6bb3c60674abddc` |
+| Checkpoint retomado | `9fb6825477ee8dbbd19119a86f6defabe10501b9` |
+| Implementação publicada para B | `1f655c92f60a6a6124e7459014447f51f7d21517` |
+| Commit de resultados confirmado em origin | `938247067a4b697e196512ce2d05991828a99b26` |
 
-Os arquivos de áudio, presets, binários e código de hosts são idênticos à árvore RC1. O catálogo histórico `docs/backend/evidence/baseline-artifacts.sha256` registrava 128 arquivos coincidentes de 129 já na RC1. A divergência era o hash histórico do `Cargo.lock`. O checkpoint preserva o `Cargo.lock` da RC1.
+A verificação inicial encontrou o branch remoto exatamente no checkpoint. A RC1 é ancestral do contrato, o contrato é ancestral do checkpoint e a entrega descende do checkpoint. O worktree original de pesquisa permaneceu separado. O ZIP de referência tinha SHA-256 `c156f7236610bac4bd6de10e256e8192f7b2b99857162a41410d626b6c4bd6ac`; os 11 itens de SHA256SUMS.txt passaram. A ordem B avulsa coincidiu com a versão do pacote e serviu como referência de propriedade.
 
-## Decisões e limites de implementação
+**Regressões.** Os 42 testes originais passaram antes da implementação. Na revisão publicada passaram 55 testes release dos cinco crates de núcleo/render e 2 do crate de presets, incluindo os 14 de reverb. [Resultados por teste](evidence/pinned-tests.txt). Os 11 hashes dos WAVs Classic2/LegacyRC1 pela API legada coincidiram com a RC1 recompilada e o checkpoint. Os dez arquivos de preset RC1 foram decodificados e preparados em 44,1/48/96 kHz. O contrato Rust e os documentos wire, fixture e mapa de IDs ficaram idênticos aos da revisão inicial do contrato.
 
-- `NUM_PARAMS` segue 83 e ID 83 é uma extensão separada. O banco RC1 segue o tempo quando não há enable explícito. `PreparedEngine` oferece validação de blocos, deduplicação por origem e eventos ordenados. O snapshot wire completo e negociação de capacidades ainda exigem integração. Não publique uma capability que o adapter ainda não implementa.
-- O preset da RC1 e a API legada usam saída LegacyRC1. A preparação v1 usa FloatBus sem hard clip. O ganho opcional pós-VCF multiplica pelo Drive e permanece desligado por padrão. A adequação acústica e a margem de pico ainda precisam de comparação quantitativa.
-- O classificador VCF usa uma execução com entrada zero e dois impulsos escalados em instâncias novas, com teto de 65.536 amostras por execução, cancelamento cooperativo e curva só para a classe Measurable. Os limiares são heurísticos. Rever os casos de sinal autônomo, DC e caudas longas antes de tratar as classes como evidência física. O host deve limitar concorrência.
-- O reverb compartilha um banco de delays entre perfis. DiffuseV1 aumenta a componente lateral do Ensemble, reduz a mistura de Shimmer na realimentação de 0,28 para 0,14 vezes o amount e adiciona componente comum ao readout do Shimmer. O perfil começa desativado. Nenhuma alegação de melhora perceptiva. O corte agudo é limitado a 0,48×Fs para manter a prewarping TPT abaixo de Nyquist em taxas baixas.
-- Gates dependentes de hardware, áudio perceptual, perfil de callback, aliasing e medição espectral específica continuam OPEN. Nenhum teste físico foi executado. [IMPLEMENTATION_MATRIX.md](IMPLEMENTATION_MATRIX.md) tem o status por issue e [BENCHMARKS.md](BENCHMARKS.md) tem a reprodução.
+**Portabilidade e propriedade.** O rlib no_std compilou para x86_64 Linux, AArch64 Linux e AArch64 Android. O check do workspace Linux e o Clippy dos crates de A concluíram com avisos. O diff da retomada está limitado aos crates de A, `tests/dsp-qualification` e `docs/wo-a`. Hosts, Android, UI, presets de fábrica, binários RC1, manifest e lock da raiz ficaram idênticos à RC1. Os crates de preset e qualificação têm locks separados.
+
+**Decisão de desempenho.** O teste de 480 frames encontrou zero chamadas alloc/free no processamento das 108 configurações e 34 blocos fora do prazo. O ensaio não cobre todos os fluxos possíveis de comandos e não instrumenta syscalls de I/O ou bloqueios de kernel. A inspeção dos novos caminhos de render, relógio e roteamento encontrou buffers limitados e dados preparados fora do callback. No benchmark Classic2 de 256 frames, a mediana das diferenças relativas de tempo mediano foi +4,02% frente à RC1. [Condições, CSVs e reprodução](BENCHMARKS.md).
+
+**Pendências para integrar.** B deve registrar aceite no SHA do contrato, combinar as capacidades com as do host e qualificar recall, automação, UI, múltiplas instâncias e dispositivos. O A/B humano de reverb, a varredura espectral das rotas moduladas e a qualificação temporal no alvo continuam OPEN. As amostras A/B e o procedimento estão nos benchmarks. A extração no_std continua incremental; os filtros, efeitos e preparação ainda precisam de validação por módulo. [Contrato para B](ADAPTER_DELTA.md).

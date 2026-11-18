@@ -1,0 +1,63 @@
+Implementation: 1f655c92f60a6a6124e7459014447f51f7d21517
+Linux x86_64, rustc 1.100.0, release, offline, locked.
+
+pinned-suite: 55 passed
+test validity::tests::known_gain_and_invalid_regimes ... ok
+test invalid_events_and_nonfinite_params_are_rejected ... ok
+test timestamped_midi_sustain_cc_bend_and_panic ... ok
+test held_stack_survives_live_count_and_spread ... ok
+test mpe_follows_owner_through_pedal_stack_edits_and_fallback ... ok
+test poly_restores_two_owners_of_same_key_after_unison ... ok
+test glide_laws_and_mid_note_disable_at_three_rates ... ok
+test independent_of_block_partition_with_ratcheted_swing ... ok
+test loop_releases_previous_origin_and_tempo_change_preserves_downbeat ... ok
+test arp_order_and_seed_and_capacity_retry ... ok
+test invalid_block_is_atomic_and_glide_is_independent ... ok
+test overlap_replay_and_scoped_pedals ... ok
+test wire_snapshot_after_variable_blocks_and_duplicate_replay ... ok
+test diamond_geometry_and_voice_trajectory ... ok
+test per_note_pressure_moves_only_its_trajectory ... ok
+test audible_and_distinct_topologies_and_forward_routes ... ok
+test extended::tests::pitch_band_changes_are_continuous_at_all_table_boundaries ... ok
+test tests::test_cem3340_hard_sync_and_polyblep_bounded ... ok
+test tests::test_kernel_12_voices_and_fx_pipeline ... ok
+test tests::test_zdf_filters_self_oscillation_and_stability ... ok
+test extended::tests::near_nyquist_tables_do_not_fold_upper_partials ... ok
+test vcf_moog::tests::fast_moog_solver_matches_reference_across_sweeps_and_saturation ... ok
+test adsr_times_and_noteoff ... ok
+test chorus_silence_and_stereo_modes ... ok
+test filter_stress_and_actual_feedback_solution ... ok
+test hadamard_is_orthogonal ... ok
+test deterministic_and_block_partition_invariant ... ok
+test oversampler_dc_latency_stopband ... ok
+test reverb_decay_and_freeze_bounded ... ok
+test no_callback_allocations ... ok
+test unison_one_to_twelve_priorities ... ok
+test zdf_equations_have_small_residuals ... ok
+test twelve_voices_steal_and_release ... ok
+test envelope_progress_uses_time_and_reports_indefinite_sustain ... ok
+test four_pole_small_signal_matches_bilinear_analytic_transfer ... ok
+test linear_morph_ramp_has_bounded_dc_transition_in_both_directions ... ok
+test morph_does_not_reintroduce_frozen_filter_state ... ok
+test oversampling_reported_latency_matches_generation_impulse ... ok
+test rational_saturator_derivative_matches_independent_finite_difference ... ok
+test chorus_tail_reaches_exact_silence_without_output_subnormals ... ok
+test bypass_kill_spill_and_reenable_are_explicit ... ok
+test diffuse_freeze_kill_and_idle_selection ... ok
+test ensemble_modes_differentiate_harmonics_and_stereo_spread ... ok
+test ensemble_shimmer_sensitivity_and_freeze_are_finite ... ok
+test freeze_does_not_record_new_excitation_in_predelay ... ok
+test fresh_zero_wet_stays_dormant_and_natural_tails_eventually_sleep ... ok
+test kill_fades_dry_gain_and_accepts_new_audio_without_old_history ... ok
+test reset_invalidates_every_delay_and_restores_rng ... ok
+test shimmer_octave_and_fifth_generate_expected_pitch_shifted_partials ... ok
+test ten_second_freeze_stays_flat_finite_and_decorrelated ... ok
+test vowel_formant_morph_selects_ae_iou_spectral_peaks ... ok
+test wet_dry_law_is_affine_for_the_same_tank ... ok
+test zero_wet_must_not_suspend_a_stale_tail ... ok
+test calibrated_rt60_tracks_targets_across_48k_and_96k ... ok
+test smf_tempo_changes_and_wav ... ok
+
+pinned-presets: 2 passed
+test checksum_and_vector_pattern_roundtrip ... ok
+test migrate_all_factory_presets_and_recall ... ok
