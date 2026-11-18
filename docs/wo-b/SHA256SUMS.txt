@@ -1,0 +1,19 @@
+# PROPHET-XII WO-XH-B v2 Gate B6 SHA-256 Artifact Manifest (Linux x86_64 + Offline UI + v2 Test Patches)
+e9980606c784986d4904cd33edbf206f02ae4f0b2b27c4b63962c2b842770377  target/release-bundle/linux-x86_64/prophet-standalone
+83eaa4c9f01f2cbd6265400a244ef86c8989d486b43dbc502179c4b88162deeb  target/release-bundle/linux-x86_64/PROPHET-XII.clap
+83eaa4c9f01f2cbd6265400a244ef86c8989d486b43dbc502179c4b88162deeb  target/release-bundle/linux-x86_64/PROPHET-XII.vst3/Contents/x86_64-linux/PROPHET-XII.so
+7c5fea6eaff237fc78b82335e57b51dc24c7757b0fd2e716833481f9765c5951  target/release-bundle/linux-x86_64/PROPHET-XII.lv2/libprophet_lv2.so
+d71c1ead886281ee83c2eaae17ce295a448715401381e59932b405d1f63fbe96  target/release-bundle/linux-x86_64/PROPHET-XII.lv2/manifest.ttl
+fa1d2e9870cfbd555536da128a8e80ac61e1d24f27516cbe358d62c2c84d5eba  target/release-bundle/linux-x86_64/PROPHET-XII.lv2/prophet-xii.ttl
+d5beda1af025207302cca1f47958f72f46c89b62a8dd68cf9762494c06e0d262  target/release-bundle/linux-x86_64/prophet-render
+cecc3b6827287512635e605c5453c32f2fb7b156a0e85b38119e8e3159843bcd  target/release-bundle/linux-x86_64/prophet-bench
+c4542d9583bec6f5f95be7655c61ae6ee8c7b84e07fa025beacf0c1f37a54d93  target/release-bundle/linux-x86_64/prophet-presets
+70ce262187c58da1af3500d7406e90de54864c386c4c9ddfd7ab7e76c2175918  target/release-bundle/linux-x86_64/prophet-probes
+5ac4c1ace5819533da3dd0cf9a2b74c31938d6ca8140ff9390239eb5ea108bd9  ui/dist/index.html
+439561f23651e6e533ac2a77edcfbd91b47c40cfdf5db54608fb5b8de61b23e3  ui/dist/assets/index-B9R7fOX2.js
+a448975814cdd7a3520d800c6413aa8d01ad7cdc96c79cdd32bfeae5325451c4  ui/dist/assets/index-BYPTHo-T.css
+f878938b12f617bb3101f6d1c28d40dd92a002e5064da4c05fa47136c18c9880  ui/dist/assets/prophet_analysis_bg-49OTJYnt.wasm
+0bcd628ffd2111f57a457c4f67effaa4119e8d7c546057cbd2a30bf6aa094fa6  ui/dist/assets/spectrum.worker-D1JieB4Z.js
+162ed62cd607a2d06771550dde4f676326307ecb0e2bda6c118dd2b99ab924e8  docs/wo-b/patches/extended4_fm_sync_lead.prophet.json
+05a02ac9e75004de3cf0ddf5f3323f5688abbc230f027b2d298402f8dc2bd5b2  docs/wo-b/patches/vector4_diamond_glass.prophet.json
+0aa784815bce1c3cd9307ff660401751cebc2beeb84b460f02e3fc8c1befc56e  docs/wo-b/patches/vector4_sequencer_arp_diffuse_exp.prophet.json
