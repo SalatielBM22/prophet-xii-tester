@@ -1,0 +1,19 @@
+[package]
+name = "prophet-lv2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "LV2 plugin and X11/GTK3 embedded UI adapter for PROPHET-XII backed by prophet-host"
+
+[lib]
+name = "prophet_lv2"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+prophet-dsp = { path = "../prophet-dsp" }
+prophet-control = { path = "../prophet-control" }
+prophet-params = { path = "../prophet-params" }
+prophet-host = { path = "../prophet-host" }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
+libc = "0.2"

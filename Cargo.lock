@@ -1291,6 +1291,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "prophet-lv2"
+version = "1.0.0"
+dependencies = [
+ "libc",
+ "prophet-control",
+ "prophet-dsp",
+ "prophet-host",
+ "prophet-params",
+ "serde_json",
+]
+
+[[package]]
 name = "prophet-params"
 version = "1.0.0"
 dependencies = [
@@ -1329,6 +1341,7 @@ dependencies = [
  "prophet-analysis-core",
  "prophet-control",
  "prophet-dsp",
+ "prophet-host",
  "prophet-params",
  "rtrb",
  "serde",
