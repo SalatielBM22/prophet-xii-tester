@@ -7,7 +7,11 @@ B records acceptance against the exact contract SHA in `docs/wo-b/CONTRACT_ADAPT
 Process requests in `host-requests.json`. Return incompatible requirements via `docs/wo-b/CONTRACT_CHANGE_REQUESTS.md`. B reconciles workspace, lockfile, shared generated assets and adapters on the separate integration branch.
 
 
-## Implementação disponível no checkpoint de migração
+## Revisão publicada após a retomada
+
+O pin de implementação para B é `1f655c92f60a6a6124e7459014447f51f7d21517`. O contrato inicial permanece em `995d772d7371480900fe74def6bb3c60674abddc`. Veja [ADAPTER_DELTA.md](ADAPTER_DELTA.md) para as APIs Rust e o protocolo de aceite, [BENCHMARKS.md](BENCHMARKS.md) para a reprodução e [IMPLEMENTATION_MATRIX.md](IMPLEMENTATION_MATRIX.md) para os gates em aberto. B deve validar o transporte, os limites combinados de fila, a troca de instância no recall e a remoção de capacidades que o host ainda não oferece.
+
+## Histórico do checkpoint de migração (9fb6825)
 
 - Importe `prophet_control::{PreparedEngine, port}`. Use `port::EnginePort` para `prepare(Prepare)` e `process(left, right, commands, acks)`. Origem, serial e offsets precisam ser validados antes de atravessar a fronteira da thread de áudio. Use um buffer de ACK com uma entrada por comando, inclusive para rejeições individuais e replays.
 - Consulte `configuration()`, `latency_samples()`, `revision()`, `rendered_frames()`, `parameter(id)`, `notes()` e `telemetry()`. Estado das teclas vem de `Note.pressed`. Uma entrada retida com `pressed == false` está sob pedal. Telemetria de VCA e ADSR é independente do estado de tecla. O levantamento do pedal ou desconexão deve entrar como comando da origem correspondente.

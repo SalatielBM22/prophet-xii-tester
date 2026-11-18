@@ -6,6 +6,11 @@
     "Assign canonical origin, serial and noteId before fan-out. Send ordered sample offsets. Drain ACKs and snapshots outside process.",
     "Use prepared oversampling and report actual driver latency/xruns separately.",
     "Map diagnostic VCF classes to graph visibility; show unavailable capabilities disabled.",
-    "Bind pattern/XY/FX controls only to negotiated engine revisions. Publish adapter acceptance at the pinned SHA."
-  ]
+    "Bind pattern/XY/FX controls only to negotiated engine revisions. Publish adapter acceptance at the pinned SHA.",
+    "Bind VoiceState and ReverbPort tail fields to the v1 snapshot; intersect capabilities with host support.",
+    "Reserve an origin for process_music. Deliver the pending stop release before suspending audio. Split on seek, loop, and block capacity.",
+    "Use the worker-only native v2 preset codec and replace validated prepared instances on a transport boundary.",
+    "Keep experimental topology and DiffuseV1 controls opt-in. Record listening and device/DAW results with exact SHA."
+  ],
+  "implementation": "1f655c92f60a6a6124e7459014447f51f7d21517"
 }

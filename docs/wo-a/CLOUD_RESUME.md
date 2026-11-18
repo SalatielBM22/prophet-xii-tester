@@ -1,4 +1,9 @@
-# Retomada do trabalho em outro ambiente Codex
+# Retomada do Agente A
+
+A retomada de 9fb6825 foi executada no branch A. O novo ponto de implementação é `1f655c92f60a6a6124e7459014447f51f7d21517`. Leia [CONTRACT_HANDOFF.md](CONTRACT_HANDOFF.md) e a matriz atual antes de iniciar outro ciclo. Preserve commits posteriores a essa revisão.
+
+## Registro histórico da migração
+
 
 O proprietário relatou em 2026-11-17 que não conseguia alterar as configurações do ambiente remoto Codex Cloud. A ação exata na interface, a mensagem de erro e a causa não foram informadas. Durante o checkpoint, uma tentativa de usar o executor retornou “No usable execution environment is available”. O executor voltou a responder e o worktree reapareceu com as alterações intactas. A relação entre esses dois sintomas permanece OPEN. Nenhuma configuração da nuvem foi alterada nesta retomada.
 
