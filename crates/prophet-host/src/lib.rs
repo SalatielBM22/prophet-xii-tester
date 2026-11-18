@@ -3,6 +3,7 @@
 //! preset codec, musical clock, and bounded VCF validity analyzer.
 
 pub mod analysis;
+pub mod embed;
 pub mod preset;
 pub mod queue;
 pub mod runtime;
@@ -28,9 +29,9 @@ pub use session::{
     create_host_session, HostControlPlane, RtHostSlot, RtMessage, RtMusicOp, RtNotice,
 };
 pub use ui::{
-    UiArpOrder, UiCommand, UiCommandReply, UiKernelTelemetry, UiMidiLearnState, UiMusicState,
-    UiNotice, UiPatchState, UiPattern, UiPoint, UiPresetSummary, UiRoute, UiSnapshot, UiStage,
-    UiStep, UiStepKind, UiTopology, PARAM_UI_COUNT,
+    ui_snapshot_to_json, UiArpOrder, UiCommand, UiCommandReply, UiKernelTelemetry,
+    UiMidiLearnState, UiMusicState, UiNotice, UiPatchState, UiPattern, UiPoint, UiPresetSummary,
+    UiRoute, UiSnapshot, UiStage, UiStep, UiStepKind, UiTopology, PARAM_UI_COUNT,
 };
 pub use wire::{
     snapshot_from_engine, EngineMessage, SnapshotPod, WireAck, WireAction, WireAlgorithm,

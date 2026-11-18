@@ -699,3 +699,8 @@ pub fn algorithm_name(alg: Algorithm) -> &'static str {
         Algorithm::DiffuseV1 => "DiffuseV1",
     }
 }
+
+/// Serializes a `UiSnapshot` to compact JSON without requiring callers to depend directly on `serde_json`.
+pub fn ui_snapshot_to_json(snap: &UiSnapshot) -> String {
+    serde_json::to_string(snap).unwrap_or_else(|_| "{}".to_owned())
+}

@@ -690,6 +690,28 @@ impl HostControlPlane {
         self.music_active_pattern = pod.active_pattern;
     }
 
+    pub fn sync_pod_from_sound(&mut self) {
+        self.latest_pod.values = self.sound.values;
+        self.latest_pod.glide_enabled = self.sound.glide;
+        self.latest_pod.patch = self.sound.patch;
+        self.latest_pod.reverb.algorithm = self.sound.algorithm;
+        self.latest_pod.reverb.enabled = self.sound.reverb_enabled;
+        self.latest_pod.reverb.policy = if self.sound.kill_tail {
+            prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Kill
+        } else {
+            prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Spill
+        };
+        let os = self.sound.values[ParamId::OversamplingMode as usize] as u8;
+        let factor = match os {
+            1 => prophet_dsp::oversample::OversampleFactor::X1,
+            4 => prophet_dsp::oversample::OversampleFactor::X4,
+            _ => prophet_dsp::oversample::OversampleFactor::X2,
+        };
+        self.latest_pod.config.oversampling = factor as u8;
+        self.latest_pod.latency_samples = factor.latency_samples();
+        self.latest_pod.active_pattern = self.music_active_pattern;
+    }
+
     /// Drains retired engines, latest `SnapshotPod`s, and RT notifications. Call before rendering UI
     /// or dispatching structural reconfigurations.
     pub fn poll(&mut self) -> usize {
@@ -1036,6 +1058,9 @@ impl HostControlPlane {
                 format!("Unknown parameter ID {id}"),
             );
         }
+        if !self.audio_running {
+            self.sync_pod_from_sound();
+        }
 
         let serial = self.serials.next_serial(ORIGIN_LOCAL_UI);
         let Some(port_cmd) = ui_to_rt_command(&UiCommand::Param { id, value }, ORIGIN_LOCAL_UI, serial, 0)
@@ -1144,6 +1169,9 @@ impl HostControlPlane {
                 self.stored_reverb_wet = self.sound.values[ParamId::ReverbWet as usize];
                 self.reverb_resync_pending = false;
                 self.pending_swap_id = Some(swap_id);
+                if !self.audio_running {
+                    self.sync_pod_from_sound();
+                }
                 self.emit_notice(true, "factoryPreset", format!("Loaded factory preset: {}", p.name));
                 let mut reply = UiCommandReply::ok(format!("Loaded factory preset {}", p.name));
                 reply.swap_id = Some(swap_id);
@@ -1200,6 +1228,9 @@ impl HostControlPlane {
                     };
                 }
                 self.pending_swap_id = Some(swap_id);
+                if !self.audio_running {
+                    self.sync_pod_from_sound();
+                }
                 self.emit_notice(true, "presetLoaded", format!("Loaded preset: {}", preset_name));
                 let mut reply = UiCommandReply::ok(format!("Loaded preset {}", preset_name));
                 reply.swap_id = Some(swap_id);
@@ -1258,6 +1289,9 @@ impl HostControlPlane {
             Ok(swap_id) => {
                 self.sound = target;
                 self.pending_swap_id = Some(swap_id);
+                if !self.audio_running {
+                    self.sync_pod_from_sound();
+                }
                 self.emit_notice(true, "oversamplingSwapped", format!("Oversampling prepared at {factor}x"));
                 let mut reply = UiCommandReply::ok(format!("Prepared {factor}x oversampling swap"));
                 reply.swap_id = Some(swap_id);
@@ -1368,6 +1402,9 @@ impl HostControlPlane {
                 self.sound.kill_tail = kill;
                 self.reverb_resync_pending = true;
             }
+        }
+        if !self.audio_running {
+            self.sync_pod_from_sound();
         }
 
         UiCommandReply::ok("Reverb configuration updated")

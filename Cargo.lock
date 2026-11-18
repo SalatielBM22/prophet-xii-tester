@@ -1280,6 +1280,7 @@ version = "1.0.0"
 name = "prophet-host"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "prophet-analysis-core",
  "prophet-control",
  "prophet-dsp",
@@ -1303,6 +1304,7 @@ dependencies = [
  "nih_plug",
  "prophet-control",
  "prophet-dsp",
+ "prophet-host",
  "prophet-params",
 ]
 
