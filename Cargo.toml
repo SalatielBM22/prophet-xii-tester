@@ -9,6 +9,7 @@ members = [
     "crates/prophet-plugin",
     "crates/prophet-android",
     "crates/prophet-analysis-core",
+    "crates/prophet-host",
 ]
 exclude = [
     "crates/prophet-analysis",

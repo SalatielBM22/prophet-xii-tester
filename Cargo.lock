@@ -1273,6 +1273,19 @@ name = "prophet-dsp"
 version = "1.0.0"
 
 [[package]]
+name = "prophet-host"
+version = "1.0.0"
+dependencies = [
+ "prophet-analysis-core",
+ "prophet-control",
+ "prophet-dsp",
+ "prophet-params",
+ "rtrb",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "prophet-params"
 version = "1.0.0"
 dependencies = [

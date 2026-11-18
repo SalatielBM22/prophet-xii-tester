@@ -1,0 +1,16 @@
+[package]
+name = "prophet-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared host adapter runtime, EnginePort v1 wire codec, command/music scheduling, off-thread preparation, and bounded VCF analysis for PROPHET-XII"
+
+[dependencies]
+prophet-control = { path = "../prophet-control" }
+prophet-dsp = { path = "../prophet-dsp" }
+prophet-params = { path = "../prophet-params" }
+prophet-analysis-core = { path = "../prophet-analysis-core" }
+rtrb = "0.3.6"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
