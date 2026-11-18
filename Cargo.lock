@@ -1253,10 +1253,14 @@ name = "prophet-android"
 version = "1.0.0"
 dependencies = [
  "jni",
+ "libc",
+ "prophet-analysis-core",
  "prophet-control",
  "prophet-dsp",
+ "prophet-host",
  "prophet-params",
  "rtrb",
+ "serde",
  "serde_json",
 ]
 

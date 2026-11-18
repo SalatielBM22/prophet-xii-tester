@@ -6,6 +6,8 @@ pub mod analysis;
 pub mod preset;
 pub mod queue;
 pub mod runtime;
+pub mod session;
+pub mod ui;
 pub mod wire;
 
 pub use analysis::{measure_filter_response, FilterPoint, FilterResponseReport, FilterValidity};
@@ -21,6 +23,14 @@ pub use queue::{
 };
 pub use runtime::{
     create_swap_pair, AudioEngineSlot, PreparedSwap, RetiredResource, WorkerSwapCoordinator,
+};
+pub use session::{
+    create_host_session, HostControlPlane, RtHostSlot, RtMessage, RtMusicOp, RtNotice,
+};
+pub use ui::{
+    UiArpOrder, UiCommand, UiCommandReply, UiKernelTelemetry, UiMidiLearnState, UiMusicState,
+    UiNotice, UiPatchState, UiPattern, UiPoint, UiPresetSummary, UiRoute, UiSnapshot, UiStage,
+    UiStep, UiStepKind, UiTopology, PARAM_UI_COUNT,
 };
 pub use wire::{
     snapshot_from_engine, EngineMessage, SnapshotPod, WireAck, WireAction, WireAlgorithm,

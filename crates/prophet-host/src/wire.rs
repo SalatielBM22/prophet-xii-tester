@@ -567,6 +567,7 @@ impl WireSnapshot {
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotPod {
     pub config: Prepare,
+    pub active_swap_id: u64,
     pub revision: u64,
     pub rendered_frames: u64,
     pub latency_samples: u32,
@@ -589,8 +590,10 @@ pub struct SnapshotPod {
 }
 
 impl SnapshotPod {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_engine(
         engine: &PreparedEngine,
+        active_swap_id: u64,
         scope: [f32; 1024],
         xruns: Option<u32>,
         cpu_percent: Option<f32>,
@@ -625,6 +628,7 @@ impl SnapshotPod {
             .unwrap_or_else(|| values[ParamId::GlideTime as usize] > 0.0005);
         Self {
             config: engine.configuration(),
+            active_swap_id,
             revision: engine.revision(),
             rendered_frames: engine.rendered_frames(),
             latency_samples: engine.latency_samples(),
@@ -689,6 +693,6 @@ pub fn snapshot_from_engine(
     cpu_percent: Option<f32>,
     active_voices_only: bool,
 ) -> WireSnapshot {
-    let pod = SnapshotPod::from_engine(engine, [0.0; 1024], xruns, cpu_percent, 0, false, 0);
+    let pod = SnapshotPod::from_engine(engine, 0, [0.0; 1024], xruns, cpu_percent, 0, false, 0);
     pod.to_wire_snapshot(host_supported_caps, active_voices_only)
 }

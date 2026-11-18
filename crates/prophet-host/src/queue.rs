@@ -288,6 +288,13 @@ pub struct MusicTransport {
     pub enabled: bool,
     pub stop_pending_flush: bool,
     pub music_origin: u8,
+    pub sample_rate: u32,
+    pub tempo_milli: u32,
+    pub swing: u8,
+    pub arp_octaves: u8,
+    pub arp_latch: bool,
+    pub current_frame: u64,
+    pub step_index: u64,
 }
 
 impl MusicTransport {
@@ -301,13 +308,38 @@ impl MusicTransport {
             enabled: false,
             stop_pending_flush: false,
             music_origin: ORIGIN_MUSIC_SCHEDULER,
+            sample_rate,
+            tempo_milli: 120_000,
+            swing: 0,
+            arp_octaves: 1,
+            arp_latch: false,
+            current_frame: 0,
+            step_index: 0,
         })
+    }
+
+    pub fn set_tempo(&mut self, tempo_milli: u32) -> Result<(), MusicError> {
+        self.scheduler.queue_tempo(tempo_milli)?;
+        self.tempo_milli = tempo_milli;
+        Ok(())
+    }
+
+    pub fn set_swing(&mut self, swing: u8) -> Result<(), MusicError> {
+        let mut rebuilt = NoteScheduler::new(self.sample_rate, self.tempo_milli, swing)?;
+        if self.enabled {
+            rebuilt.seek(self.current_frame)?;
+        }
+        self.scheduler = rebuilt;
+        self.swing = swing;
+        Ok(())
     }
 
     pub fn start_from_zero(&mut self) -> Result<(), MusicError> {
         self.scheduler.seek(0)?;
         self.enabled = true;
         self.stop_pending_flush = false;
+        self.current_frame = 0;
+        self.step_index = 0;
         Ok(())
     }
 
@@ -315,6 +347,8 @@ impl MusicTransport {
         self.scheduler.start_grid(step, frame)?;
         self.enabled = true;
         self.stop_pending_flush = false;
+        self.current_frame = frame;
+        self.step_index = u64::from(step);
         Ok(())
     }
 
@@ -322,7 +356,22 @@ impl MusicTransport {
         self.scheduler.seek(frame)?;
         self.enabled = true;
         self.stop_pending_flush = false;
+        self.current_frame = frame;
+        self.step_index = Self::estimate_step(frame, self.sample_rate, self.tempo_milli);
         Ok(())
+    }
+
+    pub fn estimate_step(frame: u64, rate: u32, tempo_milli: u32) -> u64 {
+        let denom = 15_000u128 * u128::from(rate.max(8000));
+        ((u128::from(frame) * u128::from(tempo_milli)) / denom) as u64
+    }
+
+    pub fn advance_clock_telemetry(&mut self, frames: u16) {
+        if self.enabled {
+            self.current_frame = self.current_frame.saturating_add(u64::from(frames));
+            self.step_index =
+                Self::estimate_step(self.current_frame, self.sample_rate, self.tempo_milli);
+        }
     }
 
     pub fn stop(&mut self) {
@@ -689,6 +738,7 @@ impl BlockScheduler {
                 if transport.stop_pending_flush {
                     transport.stop_pending_flush = false;
                 }
+                transport.advance_clock_telemetry((try_end - pos) as u16);
                 for ack in &self.ack_scratch[..host_take] {
                     ack_sink(*ack);
                     summary.host_acks += 1;

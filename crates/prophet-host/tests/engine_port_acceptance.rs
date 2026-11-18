@@ -564,3 +564,148 @@ fn b0_vcf_validity_gating_and_cancellation() {
         Err(prophet_analysis_core::Error::Superseded)
     ));
 }
+
+#[test]
+fn b1_shared_host_control_plane_and_zero_alloc_interleaved_rt() {
+    use prophet_host::{
+        create_host_session,
+        ui::{UiCommand, UiPoint, UiRoute, UiStage, UiStep, UiStepKind, UiTopology},
+    };
+
+    let (mut rt, mut ctrl) = create_host_session(
+        "test-host",
+        vec![
+            "enginePortV1",
+            "glideEnabled",
+            "reverbState",
+            "selectIdleReverb",
+            "oscillatorPatch",
+            "noteScheduler",
+            "vectorXY",
+        ],
+        Prepare {
+            sample_rate: 48_000,
+            max_frames: 256,
+            oversampling: 2,
+        },
+        true,
+    )
+    .unwrap();
+    ctrl.set_audio_running(true, Some(48_000), Some(256));
+
+    // Switch patch to Vector4 while idle and adjust VectorXY cleanly.
+    let patch_cmd = UiCommand::SetPatch {
+        topology: UiTopology::Vector4,
+        routes: [UiRoute::Frequency, UiRoute::Ring],
+        ratios: [1.0, 2.0],
+        stages: [UiStage {
+            target: UiPoint { x: 0.0, y: 0.0 },
+            millis: 100,
+        }; 5],
+        modulation: [UiPoint { x: 0.0, y: 0.0 }; 3],
+        loop_held: false,
+    };
+    assert!(ctrl.dispatch(patch_cmd).ok);
+
+    // Oversampling swap (4x) + interleaved odd/oversized bursts (333 f32, 1500 i16).
+    let os_reply = ctrl.dispatch(UiCommand::SetOversampling { factor: 4 });
+    assert!(os_reply.ok && os_reply.swap_id.is_some());
+
+    let mut pcm_f32 = vec![0.0f32; 333 * 2];
+    rt.process_interleaved_f32(&mut pcm_f32, 333, None, Some(12.5), None)
+        .unwrap();
+    let snap = ctrl.snapshot();
+    assert!(snap.ready);
+    assert_eq!(snap.engine_port.latency_samples, 24);
+    assert_eq!(snap.patch.topology, UiTopology::Vector4);
+    assert!(snap.engine_port.capabilities.contains(&"vectorXY".to_owned()));
+
+    // Trigger note via UI MIDI + VectorXY, verify busy-voice refusal and active-tail reverb refusal.
+    assert!(
+        ctrl.dispatch(UiCommand::VectorXY { x: 0.4, y: 0.3 })
+            .ok
+    );
+    assert!(
+        ctrl.dispatch(UiCommand::Midi {
+            status: 0x90,
+            data1: 60,
+            data2: 110,
+            note_id: Some(700),
+        })
+        .ok
+    );
+    let mut pcm_i16 = vec![0i16; 1500 * 2];
+    rt.process_interleaved_i16(&mut pcm_i16, 1500, Some(0), Some(18.0), None)
+        .unwrap();
+    assert!(pcm_i16.iter().any(|&s| s != 0));
+
+    let snap2 = ctrl.snapshot();
+    assert_eq!(snap2.engine_port.notes.len(), 1);
+    assert!((snap2.patch.position.x - 0.4).abs() < 1e-5);
+    assert_eq!(snap2.engine_port.xruns, Some(0));
+
+    let busy_patch = ctrl.dispatch(UiCommand::SetPatch {
+        topology: UiTopology::Classic2,
+        routes: [UiRoute::Sum, UiRoute::Sum],
+        ratios: [0.5, 1.5],
+        stages: [UiStage {
+            target: UiPoint { x: 0.0, y: 0.0 },
+            millis: 100,
+        }; 5],
+        modulation: [UiPoint { x: 0.0, y: 0.0 }; 3],
+        loop_held: false,
+    });
+    assert!(!busy_patch.ok);
+
+    let busy_rev = ctrl.dispatch(UiCommand::SetReverb {
+        algorithm: Some(WireAlgorithm::DiffuseV1),
+        enabled: None,
+        tail: None,
+    });
+    assert!(!busy_rev.ok);
+
+    // Edit sequencer step, save v2 preset with CRC-32, and validate VCF analysis response.
+    assert!(
+        ctrl.dispatch(UiCommand::MusicControl {
+            op: "setStep".into(),
+            pattern: Some(0),
+            pattern_len: None,
+            step_index: Some(0),
+            step: Some(UiStep {
+                kind: UiStepKind::Note,
+                key: 64,
+                velocity: 100,
+                accent: true,
+                glide: false,
+                gate: 80,
+                ratchet: 2,
+            }),
+            tempo_milli: None,
+            swing: None,
+            arp_enabled: None,
+            arp_order: None,
+            arp_octaves: None,
+            arp_latch: None,
+            arp_seed: None,
+            grid_step: None,
+            frame: None,
+        })
+        .ok
+    );
+    let saved = ctrl.dispatch(UiCommand::PresetSaveJson {
+        name: "Host Session Test".into(),
+        category: "Vector".into(),
+    });
+    assert!(saved.ok);
+    let json = saved.preset_json.unwrap();
+    assert!(
+        ctrl.dispatch(UiCommand::PresetLoadJson { json })
+            .ok
+    );
+
+    let vcf = ctrl.dispatch(UiCommand::AnalyzeFilter {
+        sample_rate: Some(48_000.0),
+    });
+    assert!(vcf.ok && vcf.filter_analysis.is_some());
+}
+

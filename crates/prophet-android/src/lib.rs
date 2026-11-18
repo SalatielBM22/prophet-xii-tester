@@ -1,427 +1,826 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Android API 26+ AAudio host. JNI and JSON run outside the audio callback.
+//! Android API 26+ AAudio + JNI host backed by `prophet-host` (`RtHostSlot` + `HostControlPlane`).
+//! Zero allocations, locks, JSON parsing, or JNI calls happen on the AAudio real-time thread.
+
+pub mod controller;
+pub mod probe;
+
+pub use controller::{AndroidController, Midi1StreamDecoder, SharedRtMetrics, ANDROID_CAPABILITIES};
+pub use probe::{
+    aaudio_error_name, build_probe_plan, is_reconnectable_aaudio_error, AndroidAudioDiagnostics,
+    AudioFormatChoice, LifecycleState, PerformanceChoice, ProbeAttemptRecord, ProbeStep,
+    SharingChoice,
+};
+
 #[cfg(target_os = "android")]
-mod android {
+mod android_jni {
+    use crate::{
+        aaudio_error_name, build_probe_plan, is_reconnectable_aaudio_error, AndroidController,
+        AudioFormatChoice, PerformanceChoice, ProbeAttemptRecord, SharedRtMetrics, SharingChoice,
+        probe::{
+            AAUDIO_CALLBACK_RESULT_CONTINUE, AAUDIO_CALLBACK_RESULT_STOP, AAUDIO_CONTENT_TYPE_MUSIC,
+            AAUDIO_DIRECTION_OUTPUT, AAUDIO_FORMAT_PCM_FLOAT, AAUDIO_FORMAT_PCM_I16, AAUDIO_OK,
+            AAUDIO_USAGE_MEDIA,
+        },
+    };
     use jni::{
-        objects::{JClass, JFloatArray},
-        sys::{jfloat, jint, jstring},
+        objects::{JByteArray, JClass, JString},
+        sys::{jboolean, jfloat, jint, jstring},
         JNIEnv,
     };
-    use prophet_control::ProphetXiiPlugin;
-    use prophet_params::{ParamId, NUM_PARAMS};
+    use prophet_host::RtHostSlot;
     use std::{
-        ffi::c_void,
+        ffi::{c_char, c_void, CStr},
         ptr,
         sync::{
-            atomic::{AtomicI32, Ordering},
-            Arc, Mutex,
+            atomic::Ordering,
+            Arc, Mutex, OnceLock,
         },
         time::Instant,
     };
-    enum Stream {}
-    enum Builder {}
+
+    #[repr(C)]
+    struct AAudioStream {
+        _opaque: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct AAudioStreamBuilder {
+        _opaque: [u8; 0],
+    }
+
     #[link(name = "aaudio")]
     extern "C" {
-        fn AAudio_createStreamBuilder(builder: *mut *mut Builder) -> i32;
-        fn AAudioStreamBuilder_delete(builder: *mut Builder) -> i32;
-        fn AAudioStreamBuilder_setDirection(b: *mut Builder, v: i32);
-        fn AAudioStreamBuilder_setFormat(b: *mut Builder, v: i32);
-        fn AAudioStreamBuilder_setChannelCount(b: *mut Builder, v: i32);
-        fn AAudioStreamBuilder_setSampleRate(b: *mut Builder, v: i32);
-        fn AAudioStreamBuilder_setPerformanceMode(b: *mut Builder, v: i32);
-        fn AAudioStreamBuilder_setSharingMode(b: *mut Builder, v: i32);
+        fn AAudio_createStreamBuilder(builder: *mut *mut AAudioStreamBuilder) -> i32;
+        fn AAudioStreamBuilder_delete(builder: *mut AAudioStreamBuilder) -> i32;
+        fn AAudioStreamBuilder_setDirection(b: *mut AAudioStreamBuilder, v: i32);
+        fn AAudioStreamBuilder_setFormat(b: *mut AAudioStreamBuilder, v: i32);
+        fn AAudioStreamBuilder_setChannelCount(b: *mut AAudioStreamBuilder, v: i32);
+        fn AAudioStreamBuilder_setSampleRate(b: *mut AAudioStreamBuilder, v: i32);
+        fn AAudioStreamBuilder_setPerformanceMode(b: *mut AAudioStreamBuilder, v: i32);
+        fn AAudioStreamBuilder_setSharingMode(b: *mut AAudioStreamBuilder, v: i32);
         fn AAudioStreamBuilder_setDataCallback(
-            b: *mut Builder,
-            cb: unsafe extern "C" fn(*mut Stream, *mut c_void, *mut c_void, i32) -> i32,
+            b: *mut AAudioStreamBuilder,
+            cb: unsafe extern "C" fn(
+                *mut AAudioStream,
+                *mut c_void,
+                *mut c_void,
+                i32,
+            ) -> i32,
             user: *mut c_void,
         );
         fn AAudioStreamBuilder_setErrorCallback(
-            b: *mut Builder,
-            cb: unsafe extern "C" fn(*mut Stream, *mut c_void, i32),
+            b: *mut AAudioStreamBuilder,
+            cb: unsafe extern "C" fn(*mut AAudioStream, *mut c_void, i32),
             user: *mut c_void,
         );
-        fn AAudioStreamBuilder_openStream(b: *mut Builder, s: *mut *mut Stream) -> i32;
-        fn AAudioStream_getSampleRate(s: *mut Stream) -> i32;
-        fn AAudioStream_getChannelCount(s: *mut Stream) -> i32;
-        fn AAudioStream_getFormat(s: *mut Stream) -> i32;
-        fn AAudioStream_getXRunCount(s: *mut Stream) -> i32;
-        fn AAudioStream_requestStart(s: *mut Stream) -> i32;
-        fn AAudioStream_requestStop(s: *mut Stream) -> i32;
-        fn AAudioStream_close(s: *mut Stream) -> i32;
+        fn AAudioStreamBuilder_openStream(
+            b: *mut AAudioStreamBuilder,
+            s: *mut *mut AAudioStream,
+        ) -> i32;
+        fn AAudioStream_getSampleRate(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getChannelCount(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getFormat(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getSharingMode(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getPerformanceMode(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getFramesPerBurst(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getBufferCapacityInFrames(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_getBufferSizeInFrames(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_setBufferSizeInFrames(s: *mut AAudioStream, v: i32) -> i32;
+        fn AAudioStream_getXRunCount(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_requestStart(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_requestStop(s: *mut AAudioStream) -> i32;
+        fn AAudioStream_close(s: *mut AAudioStream) -> i32;
     }
-    #[derive(Clone, Copy)]
-    enum Command {
-        Param(usize, f32),
-        Midi(u8, u8, u8),
-        Preset(usize),
-        Panic,
-        Learn(usize),
-        CancelLearn,
-        Unlearn(usize),
-        Remap(usize, usize),
-        ReverbBypass(bool, bool),
-        Snapshot([f32; NUM_PARAMS]),
-        Trimpot(usize, usize, f32),
+
+    type SetUsageFn = unsafe extern "C" fn(*mut AAudioStreamBuilder, i32);
+    type SetContentTypeFn = unsafe extern "C" fn(*mut AAudioStreamBuilder, i32);
+    type IsMMapUsedFn = unsafe extern "C" fn(*mut AAudioStream) -> bool;
+    type ConvertResultToTextFn = unsafe extern "C" fn(i32) -> *const c_char;
+
+    struct DynamicAAudioSyms {
+        set_usage: Option<SetUsageFn>,
+        set_content_type: Option<SetContentTypeFn>,
+        is_mmap_used: Option<IsMMapUsedFn>,
+        convert_result_to_text: Option<ConvertResultToTextFn>,
     }
-    #[derive(Clone, Copy)]
-    struct Telemetry {
-        kernel: prophet_dsp::KernelTelemetrySnapshot,
-        scope: [f32; 1024],
-        values: [f32; NUM_PARAMS],
-        trimpots: [[f32; 4]; 12],
-        cpu: f32,
-        frames: u64,
-        misses: u64,
-        sr: f32,
-        revision: u64,
-        learn_active: bool,
-        learn_target: u32,
-        cc_map: [u32; 128],
-        reverb_enabled: bool,
-        reverb_kill: bool,
-        reverb_dormant: bool,
-    }
-    struct Audio {
-        engine: ProphetXiiPlugin,
-        commands: rtrb::Consumer<Command>,
-        telemetry: rtrb::Producer<Telemetry>,
-        scope: [f32; 1024],
-        pos: usize,
-        frames: u64,
-        published: u64,
-        cpu: f32,
-        misses: u64,
-    }
-    struct Host {
-        stream: *mut Stream,
-        audio: *mut Audio,
-        commands: rtrb::Producer<Command>,
-        telemetry: rtrb::Consumer<Telemetry>,
-        error: Arc<AtomicI32>,
-    }
-    // Host ownership is serialized by JNI's mutex; the audio callback exclusively owns Audio.
-    unsafe impl Send for Host {}
-    static HOST: Mutex<Option<Host>> = Mutex::new(None);
-    unsafe extern "C" fn error(_: *mut Stream, user: *mut c_void, e: i32) {
-        unsafe {
-            (*(user as *const AtomicI32)).store(e, Ordering::Relaxed);
+
+    unsafe fn dlsym_opt<T>(name: &'static [u8]) -> Option<T> {
+        let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr() as *const c_char) };
+        if sym.is_null() {
+            None
+        } else {
+            Some(unsafe { core::mem::transmute_copy(&sym) })
         }
     }
-    unsafe extern "C" fn callback(
-        _: *mut Stream,
+
+    fn dynamic_syms() -> &'static DynamicAAudioSyms {
+        static SYMS: OnceLock<DynamicAAudioSyms> = OnceLock::new();
+        SYMS.get_or_init(|| unsafe {
+            DynamicAAudioSyms {
+                set_usage: dlsym_opt(b"AAudioStreamBuilder_setUsage\0"),
+                set_content_type: dlsym_opt(b"AAudioStreamBuilder_setContentType\0"),
+                is_mmap_used: dlsym_opt(b"AAudioStream_isMMapUsed\0"),
+                convert_result_to_text: dlsym_opt(b"AAudio_convertResultToText\0"),
+            }
+        })
+    }
+
+    fn describe_aaudio_result(code: i32) -> String {
+        if let Some(f) = dynamic_syms().convert_result_to_text {
+            let ptr = unsafe { f(code) };
+            if !ptr.is_null() {
+                if let Ok(s) = unsafe { CStr::from_ptr(ptr) }.to_str() {
+                    return s.to_owned();
+                }
+            }
+        }
+        aaudio_error_name(code).to_owned()
+    }
+
+    struct AudioCallbackCtx {
+        rt: RtHostSlot,
+        metrics: Arc<SharedRtMetrics>,
+        format: AudioFormatChoice,
+        channels: usize,
+        sample_rate_f64: f64,
+        smoothed_focus_gain: f32,
+        mono_scratch: [f32; 2048],
+    }
+
+    struct ActiveStream {
+        stream: *mut AAudioStream,
+        ctx_ptr: *mut AudioCallbackCtx,
+        metrics_raw: *mut Arc<SharedRtMetrics>,
+        metrics: Arc<SharedRtMetrics>,
+    }
+
+    unsafe impl Send for ActiveStream {}
+
+    struct HostState {
+        controller: AndroidController,
+        active: Option<ActiveStream>,
+    }
+
+    static HOST: OnceLock<Mutex<HostState>> = OnceLock::new();
+
+    fn with_host<R>(f: impl FnOnce(&mut HostState) -> R) -> Option<R> {
+        let mutex = HOST.get_or_init(|| {
+            let controller = AndroidController::new(48_000).expect("AndroidController init");
+            Mutex::new(HostState {
+                controller,
+                active: None,
+            })
+        });
+        mutex.lock().ok().map(|mut guard| f(&mut guard))
+    }
+
+    fn tear_down_stream(active: ActiveStream) {
+        unsafe {
+            AAudioStream_requestStop(active.stream);
+            AAudioStream_close(active.stream);
+            // Only free callback context & error Arc clone AFTER AAudioStream_close joins RT/error threads.
+            drop(Box::from_raw(active.ctx_ptr));
+            drop(Box::from_raw(active.metrics_raw));
+        }
+    }
+
+    unsafe extern "C" fn aaudio_error_callback(
+        _: *mut AAudioStream,
         user: *mut c_void,
-        buffer: *mut c_void,
-        frames: i32,
+        error: i32,
+    ) {
+        if user.is_null() {
+            return;
+        }
+        let metrics = unsafe { &*(user as *const Arc<SharedRtMetrics>) };
+        metrics.error_code.store(error, Ordering::Relaxed);
+    }
+
+    unsafe extern "C" fn aaudio_data_callback(
+        _: *mut AAudioStream,
+        user: *mut c_void,
+        audio_data: *mut c_void,
+        frames_i32: i32,
     ) -> i32 {
-        if frames <= 0 {
-            return 0;
+        if user.is_null() || audio_data.is_null() || frames_i32 <= 0 {
+            return AAUDIO_CALLBACK_RESULT_CONTINUE;
         }
-        let a = unsafe { &mut *(user as *mut Audio) };
-        let start = Instant::now();
-        for _ in 0..256 {
-            let Ok(c) = a.commands.pop() else {
-                break;
-            };
-            let e = &mut a.engine;
-            match c {
-                Command::Param(id, v) => {
-                    if let Some(id) = ParamId::from_index(id) {
-                        e.ipc.params.set(id, v)
+        let ctx = unsafe { &mut *(user as *mut AudioCallbackCtx) };
+        let frames = frames_i32 as usize;
+        let t0 = Instant::now();
+
+        let budget_secs = frames as f64 / ctx.sample_rate_f64.max(8000.0);
+        let xruns = None; // Populated off-RT from AAudioStream_getXRunCount on JNI poll.
+        let prev_cpu_pct = ctx.metrics.last_cpu_pct();
+
+        // Measure zero-alloc rendering of synthesizer into float or i16 HAL output buffer.
+        let target_gain = ctx.metrics.focus_gain();
+
+        match (ctx.format, ctx.channels) {
+            (AudioFormatChoice::Float, 2) => {
+                let out = unsafe { core::slice::from_raw_parts_mut(audio_data as *mut f32, frames * 2) };
+                if ctx
+                    .rt
+                    .process_interleaved_f32(out, frames, xruns, prev_cpu_pct, None)
+                    .is_err()
+                {
+                    out.fill(0.0);
+                    return AAUDIO_CALLBACK_RESULT_STOP;
+                }
+                apply_focus_ramp_f32(out, &mut ctx.smoothed_focus_gain, target_gain);
+            }
+            (AudioFormatChoice::I16, 2) => {
+                let out = unsafe { core::slice::from_raw_parts_mut(audio_data as *mut i16, frames * 2) };
+                if (ctx.smoothed_focus_gain - 1.0).abs() < 1e-4 && (target_gain - 1.0).abs() < 1e-4 {
+                    if ctx
+                        .rt
+                        .process_interleaved_i16(out, frames, xruns, prev_cpu_pct, None)
+                        .is_err()
+                    {
+                        out.fill(0);
+                        return AAUDIO_CALLBACK_RESULT_STOP;
                     }
-                }
-                Command::Midi(s, d1, d2) => {
-                    e.sync_parameters();
-                    e.handle_midi_message(s, d1, d2);
-                }
-                Command::Preset(i) => {
-                    e.panic();
-                    e.load_preset(i)
-                }
-                Command::Panic => e.panic(),
-                Command::Learn(id) => {
-                    e.ipc.params.begin_learn(id);
-                }
-                Command::CancelLearn => e.ipc.params.cancel_learn(),
-                Command::Unlearn(id) => {
-                    e.ipc.params.unlearn(id);
-                }
-                Command::Remap(cc, id) => {
-                    e.ipc.params.remap(cc, id);
-                }
-                Command::ReverbBypass(enabled, kill) => e.ipc.params.set_reverb_bypass(
-                    enabled,
-                    if kill {
-                        prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Kill
-                    } else {
-                        prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Spill
-                    },
-                ),
-                Command::Snapshot(v) => {
-                    for (i, x) in v.into_iter().enumerate() {
-                        e.ipc.params.set(ParamId::from_index(i).unwrap(), x)
-                    }
-                }
-                Command::Trimpot(i, f, v) => {
-                    if i < 12 {
-                        let p = &e.ipc.params;
-                        match f {
-                            0 => p.voice_vco_a_cents[i].store(v.clamp(-6.0, 6.0)),
-                            1 => p.voice_vco_b_cents[i].store(v.clamp(-6.0, 6.0)),
-                            2 => p.voice_vcf_pct[i].store(v.clamp(-0.05, 0.05)),
-                            3 => p.voice_env_rc_pct[i].store(v.clamp(-0.1, 0.1)),
-                            _ => {}
+                } else {
+                    let mut pos = 0usize;
+                    while pos < frames {
+                        let c = (frames - pos).min(1024);
+                        if ctx
+                            .rt
+                            .process_interleaved_f32(
+                                &mut ctx.mono_scratch[..c * 2],
+                                c,
+                                xruns,
+                                prev_cpu_pct,
+                                None,
+                            )
+                            .is_err()
+                        {
+                            out.fill(0);
+                            return AAUDIO_CALLBACK_RESULT_STOP;
                         }
+                        apply_focus_ramp_f32(
+                            &mut ctx.mono_scratch[..c * 2],
+                            &mut ctx.smoothed_focus_gain,
+                            target_gain,
+                        );
+                        for i in 0..(c * 2) {
+                            let s = ctx.mono_scratch[i].clamp(-1.0, 1.0);
+                            out[pos * 2 + i] = (s * 32767.0).round() as i16;
+                        }
+                        pos += c;
                     }
                 }
             }
-        }
-        let output =
-            unsafe { std::slice::from_raw_parts_mut(buffer as *mut f32, frames as usize * 2) };
-        let (mut l, mut r) = ([0.0; 64], [0.0; 64]);
-        let mut offset = 0;
-        while offset < frames as usize {
-            let n = (frames as usize - offset).min(64);
-            a.engine.process_audio_block(&mut l[..n], &mut r[..n]);
-            for i in 0..n {
-                output[2 * (offset + i)] = l[i];
-                output[2 * (offset + i) + 1] = r[i];
-                a.scope[a.pos] = l[i];
-                a.pos = (a.pos + 1) % 1024;
+            (AudioFormatChoice::Float, 1) => {
+                let out = unsafe { core::slice::from_raw_parts_mut(audio_data as *mut f32, frames) };
+                let mut pos = 0usize;
+                while pos < frames {
+                    let c = (frames - pos).min(1024);
+                    if ctx
+                        .rt
+                        .process_interleaved_f32(
+                            &mut ctx.mono_scratch[..c * 2],
+                            c,
+                            xruns,
+                            prev_cpu_pct,
+                            None,
+                        )
+                        .is_err()
+                    {
+                        out.fill(0.0);
+                        return AAUDIO_CALLBACK_RESULT_STOP;
+                    }
+                    apply_focus_ramp_f32(
+                        &mut ctx.mono_scratch[..c * 2],
+                        &mut ctx.smoothed_focus_gain,
+                        target_gain,
+                    );
+                    for i in 0..c {
+                        out[pos + i] = 0.5 * (ctx.mono_scratch[i * 2] + ctx.mono_scratch[i * 2 + 1]);
+                    }
+                    pos += c;
+                }
             }
-            offset += n;
+            (AudioFormatChoice::I16, 1) => {
+                let out = unsafe { core::slice::from_raw_parts_mut(audio_data as *mut i16, frames) };
+                let mut pos = 0usize;
+                while pos < frames {
+                    let c = (frames - pos).min(1024);
+                    if ctx
+                        .rt
+                        .process_interleaved_f32(
+                            &mut ctx.mono_scratch[..c * 2],
+                            c,
+                            xruns,
+                            prev_cpu_pct,
+                            None,
+                        )
+                        .is_err()
+                    {
+                        out.fill(0);
+                        return AAUDIO_CALLBACK_RESULT_STOP;
+                    }
+                    apply_focus_ramp_f32(
+                        &mut ctx.mono_scratch[..c * 2],
+                        &mut ctx.smoothed_focus_gain,
+                        target_gain,
+                    );
+                    for i in 0..c {
+                        let m = (0.5 * (ctx.mono_scratch[i * 2] + ctx.mono_scratch[i * 2 + 1]))
+                            .clamp(-1.0, 1.0);
+                        out[pos + i] = (m * 32767.0).round() as i16;
+                    }
+                    pos += c;
+                }
+            }
+            _ => return AAUDIO_CALLBACK_RESULT_STOP,
         }
-        a.frames += frames as u64;
-        let sr = a.engine.kernel.sample_rate;
-        let cpu = (start.elapsed().as_secs_f64() / (frames as f64 / sr as f64) * 100.0) as f32;
-        a.cpu = 0.9 * a.cpu + 0.1 * cpu;
-        if cpu > 100.0 {
-            a.misses += 1;
+
+        if budget_secs > 0.0 {
+            let elapsed_pct = ((t0.elapsed().as_secs_f64() / budget_secs) * 100.0) as f32;
+            ctx.metrics.store_cpu_pct(elapsed_pct);
         }
-        if a.frames - a.published >= (sr / 25.0) as u64 {
-            let p = &a.engine.ipc.params;
-            let t = Telemetry {
-                kernel: a.engine.kernel.telemetry_snapshot(),
-                scope: std::array::from_fn(|i| a.scope[(a.pos + i) % 1024]),
-                values: std::array::from_fn(|i| p.get(ParamId::from_index(i).unwrap())),
-                trimpots: std::array::from_fn(|i| {
-                    [
-                        p.voice_vco_a_cents[i].load(),
-                        p.voice_vco_b_cents[i].load(),
-                        p.voice_vcf_pct[i].load(),
-                        p.voice_env_rc_pct[i].load(),
-                    ]
-                }),
-                cpu: a.cpu,
-                frames: a.frames,
-                misses: a.misses,
-                sr,
-                revision: p.revision.load(Ordering::Relaxed),
-                learn_active: p.midi_learn_active.load(Ordering::Relaxed),
-                learn_target: p.midi_learn_target_param.load(Ordering::Relaxed),
-                cc_map: std::array::from_fn(|i| p.cc_map[i].load(Ordering::Relaxed)),
-                reverb_enabled: a.engine.kernel.reverb_params.enabled,
-                reverb_kill: a.engine.kernel.reverb_params.bypass_tail
-                    == prophet_dsp::fx::solaris_reverb::ReverbTailPolicy::Kill,
-                reverb_dormant: a.engine.kernel.reverb.is_dormant(),
+        ctx.metrics
+            .callback_invocations
+            .fetch_add(1, Ordering::Relaxed);
+        ctx.metrics
+            .frames_rendered
+            .fetch_add(frames as u64, Ordering::Relaxed);
+
+        AAUDIO_CALLBACK_RESULT_CONTINUE
+    }
+
+    #[inline(always)]
+    fn apply_focus_ramp_f32(interleaved: &mut [f32], current_gain: &mut f32, target_gain: f32) {
+        if (*current_gain - 1.0).abs() < 1e-4 && (target_gain - 1.0).abs() < 1e-4 {
+            return;
+        }
+        let step = 0.002f32;
+        for frame in interleaved.chunks_exact_mut(2) {
+            if *current_gain < target_gain {
+                *current_gain = (*current_gain + step).min(target_gain);
+            } else if *current_gain > target_gain {
+                *current_gain = (*current_gain - step).max(target_gain);
+            }
+            frame[0] *= *current_gain;
+            frame[1] *= *current_gain;
+        }
+    }
+
+    fn start_stream(state: &mut HostState, hint_sr: i32, hint_burst: i32) -> i32 {
+        if let Some(prev) = state.active.take() {
+            tear_down_stream(prev);
+        }
+        state.controller.mark_starting();
+
+        let plan = build_probe_plan(hint_sr);
+        let syms = dynamic_syms();
+        let mut last_err = -1;
+
+        for (step_idx, step) in plan.iter().enumerate() {
+            // Prepare temporary RtHostSlot at fallback rate; once negotiated, re-sync cleanly before start.
+            let initial_sr = if step.sample_rate_hz > 0 {
+                step.sample_rate_hz as u32
+            } else {
+                hint_sr.clamp(8000, 192_000) as u32
             };
-            let _ = a.telemetry.push(t);
-            a.published = a.frames;
-        }
-        0
-    }
-    fn stop(h: Host) {
-        unsafe {
-            AAudioStream_requestStop(h.stream);
-            AAudioStream_close(h.stream);
-            drop(Box::from_raw(h.audio));
-        }
-    }
-    #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_start(_: JNIEnv, _: JClass) -> jint {
-        let Ok(mut host) = HOST.lock() else {
-            return -1;
-        };
-        if host.is_some() {
-            return 0;
-        }
-        let (tx, rx) = rtrb::RingBuffer::new(1024);
-        let (tt, tr) = rtrb::RingBuffer::new(4);
-        let audio = Box::into_raw(Box::new(Audio {
-            engine: ProphetXiiPlugin::new(48000.0),
-            commands: rx,
-            telemetry: tt,
-            scope: [0.0; 1024],
-            pos: 0,
-            frames: 0,
-            published: 0,
-            cpu: 0.0,
-            misses: 0,
-        }));
-        let error_state = Arc::new(AtomicI32::new(0));
-        let mut builder = ptr::null_mut();
-        let mut stream = ptr::null_mut();
-        unsafe {
-            let result = AAudio_createStreamBuilder(&mut builder);
-            if result != 0 {
-                drop(Box::from_raw(audio));
-                return result;
+            let Ok(rt) = state.controller.prepare_stream_session(initial_sr) else {
+                last_err = -3;
+                continue;
+            };
+            let metrics_raw = Box::into_raw(Box::new(Arc::clone(&state.controller.metrics)));
+            let ctx_ptr = Box::into_raw(Box::new(AudioCallbackCtx {
+                rt,
+                metrics: Arc::clone(&state.controller.metrics),
+                format: step.format,
+                channels: 2,
+                sample_rate_f64: f64::from(initial_sr),
+                smoothed_focus_gain: state.controller.metrics.focus_gain(),
+                mono_scratch: [0.0; 2048],
+            }));
+
+            let mut builder = ptr::null_mut();
+            let create_res = unsafe { AAudio_createStreamBuilder(&mut builder) };
+            if create_res != AAUDIO_OK || builder.is_null() {
+                unsafe {
+                    drop(Box::from_raw(ctx_ptr));
+                    drop(Box::from_raw(metrics_raw));
+                }
+                last_err = create_res;
+                state.controller.record_probe_attempt(ProbeAttemptRecord {
+                    step_index: step_idx,
+                    requested_sr: step.sample_rate_hz,
+                    requested_format: step.format,
+                    requested_performance: step.performance,
+                    requested_sharing: step.sharing,
+                    open_result: create_res,
+                    open_result_name: describe_aaudio_result(create_res),
+                    start_result: None,
+                    negotiated_sr: None,
+                    negotiated_channels: None,
+                    negotiated_format: None,
+                    negotiated_performance: None,
+                    negotiated_sharing: None,
+                    frames_per_burst: None,
+                    buffer_capacity_frames: None,
+                    buffer_size_frames: None,
+                    mmap_used: None,
+                    accepted: false,
+                    detail: format!(
+                        "AAudio_createStreamBuilder failed: {}",
+                        describe_aaudio_result(create_res)
+                    ),
+                });
+                continue;
             }
-            AAudioStreamBuilder_setDirection(builder, 0);
-            AAudioStreamBuilder_setFormat(builder, 2);
-            AAudioStreamBuilder_setChannelCount(builder, 2);
-            AAudioStreamBuilder_setSampleRate(builder, 48000);
-            AAudioStreamBuilder_setPerformanceMode(builder, 12);
-            AAudioStreamBuilder_setSharingMode(builder, 1);
-            AAudioStreamBuilder_setDataCallback(builder, callback, audio as *mut c_void);
-            AAudioStreamBuilder_setErrorCallback(
-                builder,
-                error,
-                Arc::as_ptr(&error_state) as *mut c_void,
+
+            unsafe {
+                AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+                AAudioStreamBuilder_setFormat(builder, step.format.to_aaudio());
+                AAudioStreamBuilder_setChannelCount(builder, 2);
+                if step.sample_rate_hz > 0 {
+                    AAudioStreamBuilder_setSampleRate(builder, step.sample_rate_hz);
+                }
+                AAudioStreamBuilder_setPerformanceMode(builder, step.performance.to_aaudio());
+                AAudioStreamBuilder_setSharingMode(builder, step.sharing.to_aaudio());
+                if let Some(f) = syms.set_usage {
+                    f(builder, AAUDIO_USAGE_MEDIA);
+                }
+                if let Some(f) = syms.set_content_type {
+                    f(builder, AAUDIO_CONTENT_TYPE_MUSIC);
+                }
+                AAudioStreamBuilder_setDataCallback(
+                    builder,
+                    aaudio_data_callback,
+                    ctx_ptr as *mut c_void,
+                );
+                AAudioStreamBuilder_setErrorCallback(
+                    builder,
+                    aaudio_error_callback,
+                    metrics_raw as *mut c_void,
+                );
+            }
+
+            let mut stream = ptr::null_mut();
+            let open_res = unsafe { AAudioStreamBuilder_openStream(builder, &mut stream) };
+            unsafe { AAudioStreamBuilder_delete(builder) };
+
+            if open_res != AAUDIO_OK || stream.is_null() {
+                unsafe {
+                    drop(Box::from_raw(ctx_ptr));
+                    drop(Box::from_raw(metrics_raw));
+                }
+                last_err = open_res;
+                state.controller.record_probe_attempt(ProbeAttemptRecord {
+                    step_index: step_idx,
+                    requested_sr: step.sample_rate_hz,
+                    requested_format: step.format,
+                    requested_performance: step.performance,
+                    requested_sharing: step.sharing,
+                    open_result: open_res,
+                    open_result_name: describe_aaudio_result(open_res),
+                    start_result: None,
+                    negotiated_sr: None,
+                    negotiated_channels: None,
+                    negotiated_format: None,
+                    negotiated_performance: None,
+                    negotiated_sharing: None,
+                    frames_per_burst: None,
+                    buffer_capacity_frames: None,
+                    buffer_size_frames: None,
+                    mmap_used: None,
+                    accepted: false,
+                    detail: format!("openStream failed ({})", step.rationale),
+                });
+                continue;
+            }
+
+            let neg_sr = unsafe { AAudioStream_getSampleRate(stream) };
+            let neg_ch = unsafe { AAudioStream_getChannelCount(stream) };
+            let neg_fmt_raw = unsafe { AAudioStream_getFormat(stream) };
+            let neg_fmt = AudioFormatChoice::from_aaudio(neg_fmt_raw);
+            let neg_perf = PerformanceChoice::from_aaudio(unsafe { AAudioStream_getPerformanceMode(stream) });
+            let neg_share = SharingChoice::from_aaudio(unsafe { AAudioStream_getSharingMode(stream) });
+            let burst = unsafe { AAudioStream_getFramesPerBurst(stream) };
+            let cap = unsafe { AAudioStream_getBufferCapacityInFrames(stream) };
+            let mmap = syms.is_mmap_used.map(|f| unsafe { f(stream) });
+
+            let compatible_ch = matches!(neg_ch, 1 | 2);
+            let compatible_fmt = matches!(
+                neg_fmt_raw,
+                AAUDIO_FORMAT_PCM_FLOAT | AAUDIO_FORMAT_PCM_I16
             );
-            let result = AAudioStreamBuilder_openStream(builder, &mut stream);
-            AAudioStreamBuilder_delete(builder);
-            if result != 0 {
-                drop(Box::from_raw(audio));
-                return result;
+            let valid_sr = (8000..=192_000).contains(&neg_sr);
+
+            if !compatible_ch || !compatible_fmt || !valid_sr {
+                unsafe {
+                    AAudioStream_close(stream);
+                    drop(Box::from_raw(ctx_ptr));
+                    drop(Box::from_raw(metrics_raw));
+                }
+                last_err = -2;
+                state.controller.record_probe_attempt(ProbeAttemptRecord {
+                    step_index: step_idx,
+                    requested_sr: step.sample_rate_hz,
+                    requested_format: step.format,
+                    requested_performance: step.performance,
+                    requested_sharing: step.sharing,
+                    open_result: open_res,
+                    open_result_name: describe_aaudio_result(open_res),
+                    start_result: None,
+                    negotiated_sr: Some(neg_sr),
+                    negotiated_channels: Some(neg_ch),
+                    negotiated_format: neg_fmt,
+                    negotiated_performance: neg_perf,
+                    negotiated_sharing: neg_share,
+                    frames_per_burst: Some(burst),
+                    buffer_capacity_frames: Some(cap),
+                    buffer_size_frames: None,
+                    mmap_used: mmap,
+                    accepted: false,
+                    detail: format!(
+                        "Unsupported HAL negotiation: sr={neg_sr} ch={neg_ch} fmt={neg_fmt_raw}"
+                    ),
+                });
+                continue;
             }
-            if AAudioStream_getChannelCount(stream) != 2 || AAudioStream_getFormat(stream) != 2 {
-                AAudioStream_close(stream);
-                drop(Box::from_raw(audio));
-                return -2;
+
+            // Tune buffer size conservatively to 2 bursts (or hint burst) clamped to capacity.
+            let desired_burst = if burst > 0 { burst } else { hint_burst.max(64) };
+            if cap > desired_burst {
+                let target_buf = (desired_burst * 2).min(cap);
+                unsafe {
+                    AAudioStream_setBufferSizeInFrames(stream, target_buf);
+                }
             }
-            let sr = AAudioStream_getSampleRate(stream);
-            (*audio)
-                .engine
-                .kernel
-                .prepare(sr as f32, prophet_dsp::oversample::OversampleFactor::X2);
-            let result = AAudioStream_requestStart(stream);
-            if result != 0 {
-                AAudioStream_close(stream);
-                drop(Box::from_raw(audio));
-                return result;
+            let actual_buf_size = unsafe { AAudioStream_getBufferSizeInFrames(stream) };
+
+            // Reconcile prepared DSP sample rate if HAL chose a different rate than initial guess.
+            let negotiated_sr_u32 = neg_sr as u32;
+            unsafe {
+                (*ctx_ptr).format = match neg_fmt_raw {
+                    AAUDIO_FORMAT_PCM_I16 => AudioFormatChoice::I16,
+                    _ => AudioFormatChoice::Float,
+                };
+                (*ctx_ptr).channels = neg_ch as usize;
+                (*ctx_ptr).sample_rate_f64 = f64::from(negotiated_sr_u32);
+                if (*ctx_ptr).rt.slot.engine.configuration().sample_rate != negotiated_sr_u32 {
+                    let _ = state.controller.control.worker.prepare_reconfig(
+                        &state.controller.control.sound,
+                        negotiated_sr_u32,
+                        1024,
+                    );
+                    (*ctx_ptr).rt.slot.poll_swap(None);
+                    state.controller.control.poll();
+                }
             }
-            *host = Some(Host {
-                stream,
-                audio,
-                commands: tx,
-                telemetry: tr,
-                error: error_state,
+
+            let start_res = unsafe { AAudioStream_requestStart(stream) };
+            if start_res != AAUDIO_OK {
+                unsafe {
+                    AAudioStream_close(stream);
+                    drop(Box::from_raw(ctx_ptr));
+                    drop(Box::from_raw(metrics_raw));
+                }
+                last_err = start_res;
+                state.controller.record_probe_attempt(ProbeAttemptRecord {
+                    step_index: step_idx,
+                    requested_sr: step.sample_rate_hz,
+                    requested_format: step.format,
+                    requested_performance: step.performance,
+                    requested_sharing: step.sharing,
+                    open_result: open_res,
+                    open_result_name: describe_aaudio_result(open_res),
+                    start_result: Some(start_res),
+                    negotiated_sr: Some(neg_sr),
+                    negotiated_channels: Some(neg_ch),
+                    negotiated_format: neg_fmt,
+                    negotiated_performance: neg_perf,
+                    negotiated_sharing: neg_share,
+                    frames_per_burst: Some(burst),
+                    buffer_capacity_frames: Some(cap),
+                    buffer_size_frames: Some(actual_buf_size),
+                    mmap_used: mmap,
+                    accepted: false,
+                    detail: format!("requestStart failed: {}", describe_aaudio_result(start_res)),
+                });
+                continue;
+            }
+
+            let accepted_fmt = match neg_fmt_raw {
+                AAUDIO_FORMAT_PCM_I16 => AudioFormatChoice::I16,
+                _ => AudioFormatChoice::Float,
+            };
+            let accepted_perf = neg_perf.unwrap_or(step.performance);
+            let accepted_share = neg_share.unwrap_or(step.sharing);
+            state.controller.record_probe_attempt(ProbeAttemptRecord {
+                step_index: step_idx,
+                requested_sr: step.sample_rate_hz,
+                requested_format: step.format,
+                requested_performance: step.performance,
+                requested_sharing: step.sharing,
+                open_result: open_res,
+                open_result_name: describe_aaudio_result(open_res),
+                start_result: Some(start_res),
+                negotiated_sr: Some(neg_sr),
+                negotiated_channels: Some(neg_ch),
+                negotiated_format: Some(accepted_fmt),
+                negotiated_performance: Some(accepted_perf),
+                negotiated_sharing: Some(accepted_share),
+                frames_per_burst: Some(burst),
+                buffer_capacity_frames: Some(cap),
+                buffer_size_frames: Some(actual_buf_size),
+                mmap_used: mmap,
+                accepted: true,
+                detail: step.rationale.to_owned(),
             });
-            0
+            state.controller.mark_ready(
+                neg_sr,
+                neg_ch,
+                accepted_fmt,
+                accepted_perf,
+                accepted_share,
+                burst,
+                cap,
+                actual_buf_size,
+                mmap,
+            );
+            state.active = Some(ActiveStream {
+                stream,
+                ctx_ptr,
+                metrics_raw,
+                metrics: Arc::clone(&state.controller.metrics),
+            });
+            return AAUDIO_OK;
         }
+
+        state
+            .controller
+            .mark_failed(last_err, describe_aaudio_result(last_err));
+        last_err
     }
+
     #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_stop(_: JNIEnv, _: JClass) {
-        if let Ok(mut h) = HOST.lock() {
-            if let Some(h) = h.take() {
-                stop(h);
-            }
-        }
-    }
-    #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_healthy(_: JNIEnv, _: JClass) -> jint {
-        HOST.lock()
-            .ok()
-            .and_then(|h| h.as_ref().map(|h| h.error.load(Ordering::Relaxed)))
-            .unwrap_or(-1)
-    }
-    #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_command(
+    pub extern "system" fn Java_org_prophetxii_Native_isReconnectableError(
         _: JNIEnv,
         _: JClass,
-        kind: jint,
-        a: jint,
-        b: jint,
-        value: jfloat,
-    ) -> jint {
-        if !value.is_finite() {
-            return -2;
-        }
-        let c = match kind {
-            0 if a >= 0 && (a as usize) < NUM_PARAMS => Command::Param(a as usize, value),
-            1 if (128..240).contains(&a)
-                && (0..128).contains(&b)
-                && (0.0..128.0).contains(&value) =>
-            {
-                Command::Midi(a as u8, b as u8, value as u8)
-            }
-            2 if (0..10).contains(&a) => Command::Preset(a as usize),
-            3 => Command::Panic,
-            6 => Command::CancelLearn,
-            7 if a >= 0 && (a as usize) < NUM_PARAMS => Command::Unlearn(a as usize),
-            8 if a >= 0
-                && prophet_params::AtomicParamBank::learnable_cc(a as usize)
-                && b >= 0
-                && (b as usize) < NUM_PARAMS =>
-            {
-                Command::Remap(a as usize, b as usize)
-            }
-            9 if (0..=1).contains(&a) && (0..=1).contains(&b) => {
-                Command::ReverbBypass(a == 1, b == 1)
-            }
-            5 if a >= 0 && (a as usize) < NUM_PARAMS => Command::Learn(a as usize),
-            4 if (0..12).contains(&a) && (0..4).contains(&b) => {
-                Command::Trimpot(a as usize, b as usize, value)
-            }
-            _ => return -2,
-        };
-        if let Ok(mut h) = HOST.lock() {
-            if let Some(h) = h.as_mut() {
-                return if h.commands.push(c).is_ok() { 0 } else { -3 };
-            }
-        }
-        -1
+        error_code: jint,
+    ) -> jboolean {
+        u8::from(is_reconnectable_aaudio_error(error_code))
     }
+
     #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_snapshot(
+    pub extern "system" fn Java_org_prophetxii_Native_start(
+        _: JNIEnv,
+        _: JClass,
+        hint_sample_rate: jint,
+        hint_frames_per_burst: jint,
+    ) -> jint {
+        with_host(|st| {
+            if st.active.is_some() {
+                return AAUDIO_OK;
+            }
+            start_stream(st, hint_sample_rate, hint_frames_per_burst)
+        })
+        .unwrap_or(-1)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_prophetxii_Native_stop(_: JNIEnv, _: JClass) {
+        with_host(|st| {
+            if let Some(active) = st.active.take() {
+                tear_down_stream(active);
+            }
+            st.controller.mark_stopped();
+        });
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_prophetxii_Native_healthy(_: JNIEnv, _: JClass) -> jint {
+        with_host(|st| {
+            st.active
+                .as_ref()
+                .map(|a| a.metrics.error_code.load(Ordering::Relaxed))
+                .unwrap_or(-1)
+        })
+        .unwrap_or(-1)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_prophetxii_Native_dispatchJson(
+        mut env: JNIEnv,
+        _: JClass,
+        cmd_json: JString,
+    ) -> jstring {
+        let Ok(input) = env.get_string(&cmd_json) else {
+            return ptr::null_mut();
+        };
+        let input_str: String = input.into();
+        let reply = with_host(|st| st.controller.dispatch_json(&input_str).0)
+            .unwrap_or_else(|| "{\"ok\":false,\"message\":\"Host lock poisoned\"}".to_owned());
+        env.new_string(reply)
+            .map(|s| s.into_raw())
+            .unwrap_or(ptr::null_mut())
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_prophetxii_Native_pollSnapshotJson(
         env: JNIEnv,
         _: JClass,
-        values: JFloatArray,
+    ) -> jstring {
+        let json = with_host(|st| {
+            if let Some(active) = &st.active {
+                let xruns = unsafe { AAudioStream_getXRunCount(active.stream) };
+                st.controller.update_xruns((xruns >= 0).then_some(xruns));
+            } else {
+                st.controller.update_xruns(None);
+            }
+            st.controller.snapshot_json()
+        })
+        .unwrap_or_else(|| "{\"version\":1,\"ready\":false}".to_owned());
+        env.new_string(json)
+            .map(|s| s.into_raw())
+            .unwrap_or(ptr::null_mut())
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_prophetxii_Native_diagnosticsJson(
+        env: JNIEnv,
+        _: JClass,
+    ) -> jstring {
+        let json = with_host(|st| {
+            if let Some(active) = &st.active {
+                let xruns = unsafe { AAudioStream_getXRunCount(active.stream) };
+                st.controller.update_xruns((xruns >= 0).then_some(xruns));
+            }
+            st.controller.diagnostics_json()
+        })
+        .unwrap_or_else(|| "{}".to_owned());
+        env.new_string(json)
+            .map(|s| s.into_raw())
+            .unwrap_or(ptr::null_mut())
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_org_prophetxii_Native_usbMidi(
+        env: JNIEnv,
+        _: JClass,
+        data: JByteArray,
+        offset: jint,
+        length: jint,
     ) -> jint {
-        if env.get_array_length(&values).unwrap_or(0) != NUM_PARAMS as i32 {
-            return -2;
+        if offset < 0 || length <= 0 || length > 4096 {
+            return 0;
         }
-        let mut data = [0.0; NUM_PARAMS];
-        if env.get_float_array_region(&values, 0, &mut data).is_err()
-            || data.iter().any(|v| !v.is_finite())
-        {
-            return -2;
+        let Ok(bytes) = env.convert_byte_array(&data) else {
+            return 0;
+        };
+        let start = offset as usize;
+        let end = start.saturating_add(length as usize).min(bytes.len());
+        if start >= end {
+            return 0;
         }
-        if let Ok(mut h) = HOST.lock() {
-            if let Some(h) = h.as_mut() {
-                return if h.commands.push(Command::Snapshot(data)).is_ok() {
-                    0
-                } else {
-                    -3
-                };
-            }
-        }
-        -1
+        with_host(|st| st.controller.ingest_usb_midi(&bytes[start..end]) as jint).unwrap_or(0)
     }
+
     #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_state(env: JNIEnv, _: JClass) -> jstring {
-        let mut result = "{\"v\":1,\"ready\":false}".to_string();
-        if let Ok(mut h) = HOST.lock() {
-            if let Some(h) = h.as_mut() {
-                let mut last = None;
-                while let Ok(t) = h.telemetry.pop() {
-                    last = Some(t);
-                }
-                if let Some(t) = last {
-                    let envelope = |e: &prophet_dsp::env_cem3310::EnvelopeTelemetry| serde_json::json!({"stage":e.stage,"elapsedSamples":e.elapsed_samples,"progress":e.progress,"level":e.level,"timed":e.timed});
-                    result=serde_json::json!({"v":1,"ready":true,"sampleRate":t.sr,"values":t.values.as_slice(),"scope":t.scope.as_slice(),"trimpots":t.trimpots,"activeVoiceMask":t.kernel.active_voice_mask,"voiceVcaLevels":t.kernel.voice_vca_levels,"voiceFiltEnvLevels":t.kernel.voice_filt_env_levels,"voiceMidiNotes":t.kernel.voice_midi_notes,"dspLoadPercent":t.cpu,"frames":t.frames,"deadlineMisses":t.misses,"revision":t.revision,"ampEnvelopes":t.kernel.amp_envelopes.iter().map(envelope).collect::<Vec<_>>(),"filterEnvelopes":t.kernel.filter_envelopes.iter().map(envelope).collect::<Vec<_>>(),"midiLearn":{"active":t.learn_active,"target":if (t.learn_target as usize)<NUM_PARAMS{Some(t.learn_target)}else{None},"ccMap":t.cc_map.iter().map(|v|if (*v as usize)<NUM_PARAMS{Some(*v)}else{None}).collect::<Vec<_>>()},"reverb":{"enabled":t.reverb_enabled,"tail":if t.reverb_kill{"kill"}else{"spill"},"dormant":t.reverb_dormant},"underruns":unsafe{AAudioStream_getXRunCount(h.stream)}}).to_string();
-                }
-            }
-        }
-        env.new_string(result)
-            .map(|s| s.into_raw())
-            .unwrap_or(ptr::null_mut())
+    pub extern "system" fn Java_org_prophetxii_Native_setFocusGain(
+        mut env: JNIEnv,
+        _: JClass,
+        state: JString,
+        muted: jboolean,
+        gain: jfloat,
+    ) {
+        let desc = env
+            .get_string(&state)
+            .map(|s| String::from(s))
+            .unwrap_or_else(|_| "UNKNOWN".to_owned());
+        with_host(|st| st.controller.set_focus_state(&desc, muted != 0, gain));
     }
+
     #[no_mangle]
-    pub extern "system" fn Java_org_prophetxii_Native_meta(env: JNIEnv, _: JClass) -> jstring {
-        let result=serde_json::json!({"v":1,"presets":prophet_params::presets::factory_presets().iter().map(|p|serde_json::json!({"id":p.id,"name":p.name,"category":p.category.as_str()})).collect::<Vec<_>>()}).to_string();
-        env.new_string(result)
-            .map(|s| s.into_raw())
-            .unwrap_or(ptr::null_mut())
+    pub extern "system" fn Java_org_prophetxii_Native_setRouteInfo(
+        mut env: JNIEnv,
+        _: JClass,
+        route: JString,
+        usb_devices_csv: JString,
+    ) {
+        let r = env
+            .get_string(&route)
+            .map(|s| String::from(s))
+            .unwrap_or_else(|_| "unknown".to_owned());
+        let devs: Vec<String> = env
+            .get_string(&usb_devices_csv)
+            .map(|s| {
+                String::from(s)
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        with_host(|st| st.controller.set_route_info(r, devs));
     }
 }

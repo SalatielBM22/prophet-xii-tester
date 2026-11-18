@@ -3,12 +3,12 @@
 //! and bounded host runtime utilities.
 
 use crate::{
-    preset::{self, HostPresetError},
+    preset::{self, HostPresetError, Performance},
     queue::{BlockScheduler, BlockSummary, MusicTransport, SerialIssuer},
     wire::SnapshotPod,
 };
 use prophet_control::{
-    music::{Arpeggiator, NoteScheduler, PatternBank},
+    music::{Arpeggiator, NoteScheduler, Order, PatternBank},
     port::{Ack, Command, EnginePort, PortError, Prepare, Status},
     state::SoundState,
     PreparedEngine,
@@ -20,6 +20,7 @@ pub struct PreparedSwap {
     pub engine: Box<PreparedEngine>,
     pub bank: Option<Box<PatternBank>>,
     pub performance: Option<(NoteScheduler, Arpeggiator)>,
+    pub performance_meta: Option<Performance>,
 }
 
 pub enum RetiredResource {
@@ -100,7 +101,7 @@ impl WorkerSwapCoordinator {
     ) -> Result<u64, Status> {
         self.collect_retired();
         let engine = state.prepare(sample_rate, max_frames)?;
-        self.submit_prepared(engine, None, None)
+        self.submit_prepared(engine, None, None, None)
     }
 
     pub fn prepare_raw(
@@ -109,7 +110,7 @@ impl WorkerSwapCoordinator {
     ) -> Result<u64, PortError> {
         self.collect_retired();
         let engine = PreparedEngine::prepare(config)?;
-        self.submit_prepared(engine, None, None)
+        self.submit_prepared(engine, None, None, None)
             .map_err(|_| PortError::Capacity)
     }
 
@@ -121,8 +122,13 @@ impl WorkerSwapCoordinator {
     ) -> Result<u64, HostPresetError> {
         self.collect_retired();
         let bundle = preset::decode_and_prepare(bytes, sample_rate, max_frames)?;
-        self.submit_prepared(bundle.engine, bundle.bank, bundle.performance)
-            .map_err(HostPresetError::PrepareFailed)
+        self.submit_prepared(
+            bundle.engine,
+            bundle.bank,
+            bundle.performance,
+            bundle.preset.performance,
+        )
+        .map_err(HostPresetError::PrepareFailed)
     }
 
     pub fn submit_prepared(
@@ -130,6 +136,7 @@ impl WorkerSwapCoordinator {
         engine: PreparedEngine,
         bank: Option<Box<PatternBank>>,
         performance: Option<(NoteScheduler, Arpeggiator)>,
+        performance_meta: Option<Performance>,
     ) -> Result<u64, Status> {
         self.collect_retired();
         let id = self.next_swap_id;
@@ -139,6 +146,7 @@ impl WorkerSwapCoordinator {
             engine: Box::new(engine),
             bank,
             performance,
+            performance_meta,
         };
         self.swap_tx.push(msg).map_err(|_| Status::Capacity)?;
         Ok(id)
@@ -156,8 +164,6 @@ impl AudioEngineSlot {
 
     /// Checks whether a newly prepared replacement is waiting and installs it ONLY when the
     /// retire queue has capacity (so the audio thread never deallocates `Box<PreparedEngine>`!).
-    /// If `force` is true (stopped transport boundary) it swaps even with voices active; otherwise
-    /// it swaps immediately without dropping an already-retired engine.
     pub fn poll_swap(&mut self, serials: Option<&SerialIssuer>) -> bool {
         if self.retire_tx.slots() < 2 || self.swap_rx.is_empty() {
             if !self.swap_rx.is_empty() {
@@ -170,10 +176,10 @@ impl AudioEngineSlot {
             let Ok(next) = self.swap_rx.pop() else {
                 break;
             };
-            // Flush stop release cleanly on outgoing engine before retiring it if needed.
             if let Some(m) = self.music.as_mut() {
                 let _ = m.flush_stop_before_suspend(&mut self.engine);
             }
+            let new_sr = next.engine.configuration().sample_rate;
             let old = core::mem::replace(&mut self.engine, next.engine);
             let _ = self.retire_tx.push(RetiredResource::Engine(old));
 
@@ -187,12 +193,40 @@ impl AudioEngineSlot {
                 if let Some(m) = self.music.as_mut() {
                     m.scheduler = sched;
                     m.arp = arp;
+                    if let Some(meta) = next.performance_meta {
+                        m.active_pattern = usize::from(meta.pattern.min(63));
+                        m.tempo_milli = meta.tempo_milli;
+                        m.swing = meta.swing;
+                        m.arp_octaves = meta.octaves;
+                        m.arp_latch = meta.latch;
+                        m.arp.order = match meta.mode {
+                            1 => Order::Down,
+                            2 => Order::UpDown,
+                            3 => Order::AsPlayed,
+                            4 => Order::Random,
+                            5 => Order::Chord,
+                            _ => Order::Up,
+                        };
+                    }
+                    m.sample_rate = new_sr;
+                    m.enabled = false;
+                    m.stop_pending_flush = false;
+                    m.current_frame = 0;
+                    m.step_index = 0;
+                }
+            } else if let Some(m) = self.music.as_mut() {
+                if m.sample_rate != new_sr {
+                    if let Ok(mut rebuilt) = NoteScheduler::new(new_sr, m.tempo_milli, m.swing) {
+                        if m.enabled {
+                            let _ = rebuilt.seek(m.current_frame);
+                        }
+                        m.scheduler = rebuilt;
+                        m.sample_rate = new_sr;
+                    }
                 }
             }
             self.scheduler.clear_carried();
-            if let Some(s) = serials {
-                s.advance_epoch_and_reset();
-            }
+            let _ = serials;
             self.active_swap_id = next.swap_id;
             applied = true;
         }
@@ -233,18 +267,18 @@ impl AudioEngineSlot {
         for (i, dst) in linear_scope.iter_mut().enumerate() {
             *dst = self.scope[(self.scope_pos + i) % 1024];
         }
-        let (pat, playing) = self
-            .music
-            .as_ref()
-            .map_or((0, false), |m| (m.active_pattern as u8, m.enabled));
+        let (pat, playing, step) = self.music.as_ref().map_or((0, false, 0), |m| {
+            (m.active_pattern as u8, m.enabled, m.step_index)
+        });
         SnapshotPod::from_engine(
             &self.engine,
+            self.active_swap_id,
             linear_scope,
             xruns,
             cpu_percent,
             pat,
             playing,
-            0,
+            step,
         )
     }
 }
