@@ -812,16 +812,7 @@ fn run_native_desktop_mode(
     let init_block = selection.requested_buffer.unwrap_or(256).clamp(1, 1024) as u16;
     let (rt_slot, mut ctrl) = create_host_session(
         "standalone",
-        vec![
-            "engine-port-v1",
-            "vector4",
-            "reverb-algorithms",
-            "music-sequencer",
-            "vcf-validity",
-            "native-window",
-            "cpal-audio",
-            "hardware-midi",
-        ],
+        STANDALONE_CAPABILITIES.to_vec(),
         Prepare {
             sample_rate: sr,
             max_frames: init_block,
@@ -1458,9 +1449,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
 }
 
+/// Engine capabilities this host supports. They are intersected with the engine's own
+/// table, so the names must be the EnginePort ones (`prophet_host::wire`), as in the
+/// plugin, LV2 and Android hosts.
+const STANDALONE_CAPABILITIES: &[&str] = &[
+    "enginePortV1",
+    "glideEnabled",
+    "reverbState",
+    "selectIdleReverb",
+    "oscillatorPatch",
+    "noteScheduler",
+    "vectorXY",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_capabilities_use_engine_port_names() {
+        // Every engine capability, Vector4 included, so the intersection is never empty.
+        let mask = prophet_host::wire::encode_capabilities_mask(STANDALONE_CAPABILITIES.iter().copied());
+        let negotiated = prophet_host::wire::intersect_capabilities(mask, STANDALONE_CAPABILITIES);
+        assert_eq!(negotiated.len(), STANDALONE_CAPABILITIES.len());
+    }
 
     #[test]
     fn browser_open_url_rewrites_unspecified_loopback() {

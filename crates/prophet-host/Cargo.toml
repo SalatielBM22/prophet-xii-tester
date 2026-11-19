@@ -17,3 +17,8 @@ serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 libc = "0.2"
+
+# Microsoft Edge WebView2 hosting for the embedded React UI (standalone window and
+# VST3/CLAP editors). Windows only, so Linux/Android never pull webkit2gtk or tao.
+[target.'cfg(target_os = "windows")'.dependencies]
+wry = { version = "=0.57.3", default-features = false }
