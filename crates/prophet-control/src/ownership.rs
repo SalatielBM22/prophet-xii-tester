@@ -135,13 +135,42 @@ impl ProphetXiiPlugin {
                 self.drop_note(i);
             }
         }
-        self.refresh_stack();
         for (ch, pedals) in self.ownership.pedals[origin as usize]
             .iter_mut()
             .enumerate()
         {
             if channel.is_none_or(|c| usize::from(c) == ch) {
                 *pedals = Pedals::default();
+            }
+        }
+        // This origin's damper may have been the only one holding notes that
+        // other origins released on the same channel.
+        for ch in 0..16u8 {
+            if channel.is_none_or(|c| c == ch) {
+                self.release_unheld(ch);
+            }
+        }
+        self.refresh_stack();
+    }
+    /// The damper (CC64) acts as one physical pedal per MIDI channel: a pedal
+    /// held by any origin sustains keys released on that channel by every
+    /// origin, so a hardware pedal holds notes played on the local UI keyboard.
+    /// Sostenuto (CC66) stays per origin because it captures that origin's keys.
+    fn damper_down(&self, ch: u8) -> bool {
+        self.ownership
+            .pedals
+            .iter()
+            .any(|origin| origin[usize::from(ch)].damper)
+    }
+    fn release_unheld(&mut self, ch: u8) {
+        if self.damper_down(ch) {
+            return;
+        }
+        for i in 0..128 {
+            if self.ownership.notes[i]
+                .is_some_and(|n| n.channel == ch && !n.pressed && !n.sostenuto)
+            {
+                self.drop_note(i);
             }
         }
     }
@@ -197,9 +226,10 @@ impl ProphetXiiPlugin {
                     .iter()
                     .position(|n| n.as_ref().is_some_and(find))
                 {
+                    let damper = self.damper_down(ch);
                     let n = self.ownership.notes[i].as_mut().unwrap();
                     n.pressed = false;
-                    if !self.ownership.pedals[origin as usize][ch as usize].damper && !n.sostenuto {
+                    if !damper && !n.sostenuto {
                         self.drop_note(i);
                     }
                 }
@@ -213,23 +243,18 @@ impl ProphetXiiPlugin {
                 } else {
                     pedals.sostenuto = down
                 }
-                let damper = pedals.damper;
-                for i in 0..128 {
-                    if let Some(n) = &mut self.ownership.notes[i] {
-                        if n.origin != origin || n.channel != ch {
-                            continue;
-                        }
-                        if capture {
-                            n.sostenuto = n.pressed
-                        }
-                        if d1 == 66 && !down {
-                            n.sostenuto = false
-                        }
-                        if !n.pressed && !n.sostenuto && !damper {
-                            self.drop_note(i)
-                        }
+                for n in self.ownership.notes.iter_mut().flatten() {
+                    if n.origin != origin || n.channel != ch {
+                        continue;
+                    }
+                    if capture {
+                        n.sostenuto = n.pressed
+                    }
+                    if d1 == 66 && !down {
+                        n.sostenuto = false
                     }
                 }
+                self.release_unheld(ch);
             }
             0xb0 if d1 == 120 || d1 == 123 => self.release_source(origin, Some(ch)),
             0xb0 | 0xd0 | 0xe0 => {

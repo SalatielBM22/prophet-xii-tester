@@ -55,7 +55,9 @@ function formatFilterCaption(filter: FilterResponse): string {
   return `${filter.sampleRate} Hz FFT transfer measurement`;
 }
 
-export const AnalysisPanel = memo(function AnalysisPanel({ frame, values, connected, token, metadata }: { frame: Frame | null; values: number[]; connected: boolean; token: string; metadata: Metadata }) {
+/** `filterChart` must be false when another component owns /api/v1/filter: the host
+ *  supersedes every older transfer request, so two measuring owners starve each other. */
+export const AnalysisPanel = memo(function AnalysisPanel({ frame, values, connected, token, metadata, filterChart = true }: { frame: Frame | null; values: number[]; connected: boolean; token: string; metadata: Metadata; filterChart?: boolean }) {
   const scope = useRef<HTMLCanvasElement>(null), spectrum = useRef<HTMLCanvasElement>(null);
   const worker = useRef<Worker | null>(null);
   const transfer = useRef<TransferQueue<FilterResponse> | null>(null);
@@ -108,6 +110,7 @@ export const AnalysisPanel = memo(function AnalysisPanel({ frame, values, connec
 
   useEffect(() => {
     setFilter(null);
+    if (!filterChart) return;
     if (!connected) { setFilterStatus('Disconnected'); return; }
     const queue = new TransferQueue(async (parameters, signal) => {
         const response = await fetch('/api/v1/filter' + (token ? `?token=${encodeURIComponent(token)}` : ''), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parameters), signal });
@@ -124,13 +127,13 @@ export const AnalysisPanel = memo(function AnalysisPanel({ frame, values, connec
     });
     transfer.current = queue; queue.schedule(currentValues.current);
     return () => { queue.dispose(); transfer.current = null; };
-  }, [connected, token]);
-  useEffect(() => { if (connected) { setFilterStatus('Measuring transfer response…'); transfer.current?.schedule(currentValues.current); } }, [signature, connected]);
+  }, [connected, token, filterChart]);
+  useEffect(() => { if (connected && filterChart) { setFilterStatus('Measuring transfer response…'); transfer.current?.schedule(currentValues.current); } }, [signature, connected, filterChart]);
 
   return <section className="analysis" aria-label="Signal analysis">
     <div className="meters">
       <div><h2>OUTPUT WAVEFORM</h2><canvas ref={scope} width={900} height={130} aria-label="Real Rust waveform snapshot" /><p>Scope snapshot · {connected ? frame?.sampleRate : '—'} Hz; no continuous acquisition implied.</p></div>
-      <div className="filterchart"><h2>VCF SMALL-SIGNAL TRANSFER</h2><p role="status">{filterStatus}</p><svg viewBox="0 0 500 150" role="img" aria-label="VCF magnitude and unwrapped phase"><path d={filter ? filterPath(filter, false) : ''} fill="none" stroke="#e9b95e" strokeWidth="2" /><path d={filter ? filterPath(filter, true) : ''} fill="none" stroke="#80cdae" /></svg><span>{filter ? formatFilterCaption(filter) : 'Sample rate unavailable'} · amber |H| dB · green phase rad; phase masked below −100 dB</span><span>Log frequency: 20 Hz — {(filter ? filter.hz[filter.hz.length - 1] : undefined) ?? '—'} Hz. Transfer response is separate from live audio.</span></div>
+      {filterChart && <div className="filterchart"><h2>VCF SMALL-SIGNAL TRANSFER</h2><p role="status">{filterStatus}</p><svg viewBox="0 0 500 150" role="img" aria-label="VCF magnitude and unwrapped phase"><path d={filter ? filterPath(filter, false) : ''} fill="none" stroke="#e9b95e" strokeWidth="2" /><path d={filter ? filterPath(filter, true) : ''} fill="none" stroke="#80cdae" /></svg><span>{filter ? formatFilterCaption(filter) : 'Sample rate unavailable'} · amber |H| dB · green phase rad; phase masked below −100 dB</span><span>Log frequency: 20 Hz — {(filter ? filter.hz[filter.hz.length - 1] : undefined) ?? '—'} Hz. Transfer response is separate from live audio.</span></div>}
     </div>
     <h2>LIVE OUTPUT SPECTRUM</h2>
     <p role="status">{!connected ? 'Spectrum disconnected' : continuous ? spectralInfo : 'Continuous spectrum unavailable: legacy scope snapshots are discontinuous.'}</p>

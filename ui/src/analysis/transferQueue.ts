@@ -1,4 +1,6 @@
-/** At most one HTTP measurement in flight plus one replaceable pending intent. */
+/** At most one HTTP measurement in flight plus one replaceable pending intent.
+ *  Throttled, not debounced: while values keep changing (a knob drag) a measurement
+ *  still starts at most `intervalMs` after the first pending change. */
 export class TransferQueue<T> {
   private generation = 0;
   private latest: { values: number[]; generation: number } | null = null;
@@ -6,12 +8,12 @@ export class TransferQueue<T> {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   private controller = new AbortController();
-  constructor(private request: (values: number[], signal: AbortSignal) => Promise<T>, private publish: (response: T) => void, private error: (error: unknown) => void) {}
+  constructor(private request: (values: number[], signal: AbortSignal) => Promise<T>, private publish: (response: T) => void, private error: (error: unknown) => void, private intervalMs = 180) {}
   schedule(values: readonly number[]) {
     if (this.disposed) return;
     this.latest = { values: [...values], generation: ++this.generation };
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => { this.timer = undefined; void this.drain(); }, 180);
+    if (this.timer) return;
+    this.timer = setTimeout(() => { this.timer = undefined; void this.drain(); }, this.intervalMs);
   }
   private async drain() {
     if (this.active || this.timer || this.disposed || !this.latest) return;

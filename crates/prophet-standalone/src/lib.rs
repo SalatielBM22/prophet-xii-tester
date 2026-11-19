@@ -67,6 +67,98 @@ impl CommandInput {
         }
     }
 }
+/// Context of one callback whose processing exceeded its own audio duration.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MissRecord {
+    /// Monotonic time since the processor was created.
+    pub at_ns: u64,
+    pub frames: usize,
+    pub processing_ns: u64,
+    pub interval_ns: u64,
+    pub active_voices: u32,
+}
+pub const LOAD_BUCKETS: usize = 64;
+/// Width of one load histogram bucket, in percent of the callback budget.
+pub const LOAD_BUCKET_PCT: f32 = 2.5;
+/// Whole-session callback timing, kept allocation-free on the audio thread.
+///
+/// `load` is processing time over the callback's own audio duration, so a deadline
+/// miss is load above 100 %. A late wakeup is a callback interval longer than 1.5x
+/// the previous callback's audio: the OS scheduled us late, whatever the DSP cost.
+/// Separating the two tells DSP overload apart from scheduler or driver stalls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SessionTiming {
+    pub callbacks: u64,
+    /// The last bucket is open-ended (>= 157.5 %).
+    pub load_hist: [u64; LOAD_BUCKETS],
+    pub late_wakeups: u64,
+    pub frames_min: usize,
+    pub frames_max: usize,
+    pub misses_with_voices: u64,
+    pub misses_idle: u64,
+    pub first_miss: Option<MissRecord>,
+    pub last_miss: Option<MissRecord>,
+    pub worst_miss: Option<MissRecord>,
+}
+impl Default for SessionTiming {
+    fn default() -> Self {
+        Self {
+            callbacks: 0,
+            load_hist: [0; LOAD_BUCKETS],
+            late_wakeups: 0,
+            frames_min: 0,
+            frames_max: 0,
+            misses_with_voices: 0,
+            misses_idle: 0,
+            first_miss: None,
+            last_miss: None,
+            worst_miss: None,
+        }
+    }
+}
+impl SessionTiming {
+    /// Upper edge of the histogram bucket holding quantile `q` (0..=1), in percent.
+    pub fn load_percentile(&self, q: f64) -> f32 {
+        if self.callbacks == 0 {
+            return 0.0;
+        }
+        let rank = ((self.callbacks as f64 * q.clamp(0.0, 1.0)).ceil() as u64).max(1);
+        let mut seen = 0;
+        for (i, n) in self.load_hist.iter().enumerate() {
+            seen += n;
+            if seen >= rank {
+                return (i + 1) as f32 * LOAD_BUCKET_PCT;
+            }
+        }
+        LOAD_BUCKETS as f32 * LOAD_BUCKET_PCT
+    }
+    pub fn deadline_misses(&self) -> u64 {
+        self.misses_with_voices + self.misses_idle
+    }
+    fn record(&mut self, frames: usize, load: f32, miss: MissRecord) {
+        self.callbacks += 1;
+        let bucket = ((load / LOAD_BUCKET_PCT).max(0.0) as usize).min(LOAD_BUCKETS - 1);
+        self.load_hist[bucket] += 1;
+        self.frames_min = if self.callbacks == 1 { frames } else { self.frames_min.min(frames) };
+        self.frames_max = self.frames_max.max(frames);
+        if load > 100.0 {
+            if miss.active_voices > 0 {
+                self.misses_with_voices += 1;
+            } else {
+                self.misses_idle += 1;
+            }
+            self.first_miss.get_or_insert(miss);
+            self.last_miss = Some(miss);
+            if self.worst_miss.is_none_or(|w| {
+                // Compare overload ratios without division by zero frames.
+                miss.processing_ns as u128 * w.frames.max(1) as u128
+                    > w.processing_ns as u128 * miss.frames.max(1) as u128
+            }) {
+                self.worst_miss = Some(miss);
+            }
+        }
+    }
+}
 /// Contiguous mono acquisition, not a periodically sampled scope. Sequence
 /// advances even when the bounded transport is full, making gaps detectable.
 #[derive(Clone, Copy)]
@@ -116,6 +208,7 @@ pub struct Telemetry {
     pub dropped_capture: u64,
     pub backend_buffered_ns: Option<u64>,
     pub invalid_callbacks: u64,
+    pub session: SessionTiming,
 }
 pub struct AudioProcessor {
     pub engine: ProphetXiiPlugin,
@@ -151,6 +244,7 @@ pub struct AudioProcessor {
     peak_queue_depth: usize,
     pub backend_buffered_ns: Option<u64>,
     invalid_callbacks: u64,
+    session: SessionTiming,
 }
 impl AudioProcessor {
     pub fn new(
@@ -210,7 +304,11 @@ impl AudioProcessor {
             peak_queue_depth: 0,
             backend_buffered_ns: None,
             invalid_callbacks: 0,
+            session: SessionTiming::default(),
         }
+    }
+    pub fn session_timing(&self) -> &SessionTiming {
+        &self.session
     }
     pub fn attach_capture(&mut self, producer: Producer<CaptureChunk>) {
         self.capture = Some(producer);
@@ -288,6 +386,10 @@ impl AudioProcessor {
         }
         if let Some(previous) = self.previous_callback {
             self.callback_interval_ns = start.duration_since(previous).as_nanos() as u64;
+            let expected_ns = self.callback_frames as f64 * 1e9 / self.engine.kernel.sample_rate as f64;
+            if self.callback_frames > 0 && self.callback_interval_ns as f64 > 1.5 * expected_ns {
+                self.session.late_wakeups += 1;
+            }
         }
         self.previous_callback = Some(start);
         self.peak_queue_depth = self.peak_queue_depth.max(self.commands.slots());
@@ -404,6 +506,7 @@ impl AudioProcessor {
                 dropped_capture: self.dropped_capture,
                 backend_buffered_ns: self.backend_buffered_ns,
                 invalid_callbacks: self.invalid_callbacks,
+                session: self.session,
             };
             if self.telemetry.push(t).is_err() {
                 self.dropped_telemetry += 1;
@@ -424,6 +527,14 @@ impl AudioProcessor {
         if load > 100.0 {
             self.deadline_misses += 1;
         }
+        let miss = MissRecord {
+            at_ns: start.duration_since(self.origin).as_nanos() as u64,
+            frames,
+            processing_ns: self.processing_ns,
+            interval_ns: self.callback_interval_ns,
+            active_voices: self.engine.kernel.last_telemetry.active_voice_mask.count_ones(),
+        };
+        self.session.record(frames, load, miss);
     }
 }
 
@@ -532,5 +643,56 @@ pub mod transfer {
             tail_relative_rms: meta.tail_relative_rms,
             bin_hz: meta.bin_hz,
         })
+    }
+}
+
+#[cfg(test)]
+mod session_timing_tests {
+    use super::*;
+
+    fn miss(frames: usize, processing_us: u64, voices: u32) -> MissRecord {
+        MissRecord {
+            at_ns: processing_us,
+            frames,
+            processing_ns: processing_us * 1000,
+            interval_ns: 0,
+            active_voices: voices,
+        }
+    }
+
+    #[test]
+    fn whole_session_percentiles_come_from_the_load_histogram() {
+        let mut s = SessionTiming::default();
+        for _ in 0..98 {
+            s.record(480, 10.0, miss(480, 1000, 2));
+        }
+        s.record(480, 60.0, miss(480, 6000, 12));
+        s.record(480, 130.0, miss(480, 13000, 12));
+        assert_eq!(s.callbacks, 100);
+        assert_eq!(s.load_percentile(0.5), 12.5);
+        assert_eq!(s.load_percentile(0.99), 62.5);
+        assert_eq!(s.load_percentile(1.0), 132.5);
+        assert_eq!(s.deadline_misses(), 1);
+    }
+
+    #[test]
+    fn misses_split_by_voice_activity_and_keep_first_last_worst() {
+        let mut s = SessionTiming::default();
+        s.record(480, 120.0, miss(480, 12000, 0));
+        s.record(96, 300.0, miss(96, 6000, 12));
+        s.record(480, 101.0, miss(480, 10100, 12));
+        assert_eq!((s.misses_idle, s.misses_with_voices), (1, 2));
+        assert_eq!(s.first_miss.unwrap().active_voices, 0);
+        assert_eq!(s.last_miss.unwrap().processing_ns, 10_100_000);
+        // 6 ms over 96 frames (2 ms of audio) is the worst overload ratio.
+        assert_eq!(s.worst_miss.unwrap().frames, 96);
+        assert_eq!((s.frames_min, s.frames_max), (96, 480));
+    }
+
+    #[test]
+    fn overload_beyond_the_histogram_lands_in_the_open_bucket() {
+        let mut s = SessionTiming::default();
+        s.record(480, 5000.0, miss(480, 500_000, 12));
+        assert_eq!(s.load_percentile(1.0), LOAD_BUCKETS as f32 * LOAD_BUCKET_PCT);
     }
 }

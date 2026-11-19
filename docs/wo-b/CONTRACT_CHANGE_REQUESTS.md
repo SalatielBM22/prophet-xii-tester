@@ -62,3 +62,17 @@ Per `WO-XH-B v2` ownership rules, Agent B does **not** modify Agent A's read-onl
 - **Isolated Host-Side Workaround (`crates/prophet-plugin`):**
   - Map `NoteEvent::PolyPressure { timing, channel, pressure, .. }` to channel pressure `Action::Midi { status: 0xD0 | (channel & 0x0F), data1: pressure_u8, data2: 0, note_id }` on `ORIGIN_DAW_HOST` (which applies cleanly to channel/global aftertouch via `0xD0` without direct `kernel.allocator.voices` mutation).
 
+
+---
+
+## CCR-05 — Damper (CC64) Is Channel-Wide Across Origins
+
+- **Severity:** High (user-visible polyphony loss while sustaining)
+- **Observed Behavior (before this change):**
+  - `Ownership` stored the damper per `(origin, channel)`. A CASIO pedal arrives as `ORIGIN_HARDWARE_MIDI` while the on-screen keyboard plays as `ORIGIN_LOCAL_UI`, so released UI keys were never retained: with the pedal down, 12 released UI notes left only the voices still in their release tail active (`active_voice_mask` popcount 2 in `crates/prophet-host/tests/sustain_origins.rs` before the fix, 12 after).
+  - Raw `handle_midi_message` (origin 0 only, used by the `--http-dev` standalone) was unaffected because every source shares one origin there.
+- **Accepted Contract Change:**
+  - A damper held by any origin sustains keys released on the same MIDI channel by every origin. Notes drop when the last damper on that channel lifts, or when `PanicOrigin` / CC120 / CC123 clears the last pedal-owning origin.
+  - Sostenuto (CC66) stays per origin: it captures the keys that origin holds at the moment of the press.
+  - Note identity, serial watermarks and `PanicOrigin` note release stay per origin.
+- **Open Point:** MPE master-channel pedals (channel 0 sustaining member channels 1–15) remain out of scope.
