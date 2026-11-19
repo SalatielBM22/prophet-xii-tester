@@ -246,8 +246,18 @@ export default function App() {
     return ids.map(id => Number((values[id] ?? 0).toFixed(4))).join(',');
   }, [values]);
 
+  // One native measurement at a time (~50 ms of synchronous host work each).
+  // A change that arrives meanwhile is measured right after the reply.
+  const nativeFilterInFlight = useRef(false);
+  const nativeFilterDirty = useRef(false);
+  const triggerNativeFilterRef = useRef<() => void>(() => {});
   const triggerNativeFilterMeasure = useCallback(() => {
     if (!nativeTransport || !connected) return;
+    if (nativeFilterInFlight.current) {
+      nativeFilterDirty.current = true;
+      return;
+    }
+    nativeFilterInFlight.current = true;
     setNativeFilterStatus('Measuring small-signal VCF response…');
     void nativeTransport
       .dispatch({ type: 'analyzeFilter', sample_rate: uiSnap?.enginePort.sampleRate })
@@ -258,16 +268,31 @@ export default function App() {
         } else {
           setNativeFilterStatus(reply.message || 'VCF analysis unavailable');
         }
+      })
+      .catch(error => setNativeFilterStatus(String(error)))
+      .finally(() => {
+        nativeFilterInFlight.current = false;
+        if (nativeFilterDirty.current) {
+          nativeFilterDirty.current = false;
+          triggerNativeFilterRef.current();
+        }
       });
   }, [nativeTransport, connected, uiSnap?.enginePort.sampleRate]);
+  triggerNativeFilterRef.current = triggerNativeFilterMeasure;
 
+  // Throttled (not debounced) so the curve follows a continuous knob drag.
+  const nativeFilterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!isNative || !connected) return;
-    const timer = setTimeout(() => {
-      triggerNativeFilterMeasure();
-    }, 180);
-    return () => clearTimeout(timer);
-  }, [isNative, connected, filterSignature, triggerNativeFilterMeasure]);
+    if (!isNative || !connected || nativeFilterTimer.current) return;
+    nativeFilterTimer.current = setTimeout(() => {
+      nativeFilterTimer.current = null;
+      triggerNativeFilterRef.current();
+    }, 120);
+  }, [isNative, connected, filterSignature]);
+  useEffect(() => () => {
+    if (nativeFilterTimer.current) clearTimeout(nativeFilterTimer.current);
+    nativeFilterTimer.current = null;
+  }, []);
 
   // --- Legacy HTTP/WebSocket Connection Lifecycle (runs ONLY when !isNative) ---
   const capability = useCallback(
@@ -1477,7 +1502,7 @@ export default function App() {
 
       {/* EXPANDABLE SPECTRUM / CAPTURE DRAWER */}
       {analysisOpen && !isNative && (
-        <AnalysisPanel frame={frame} values={values} connected={connected} token={token} metadata={metadata} />
+        <AnalysisPanel frame={frame} values={values} connected={connected} token={token} metadata={metadata} filterChart={false} />
       )}
       {analysisOpen && isNative && (
         <section className="panel native-spectrum-drawer" aria-label="Oscilloscope and Spectrum Info">

@@ -18,3 +18,17 @@ describe('bounded transfer measurements', () => {
     expect(publish).toHaveBeenCalledWith(3); queue.dispose();
   });
 });
+describe('continuous parameter gestures', () => {
+  it('keeps measuring while values change every frame instead of waiting for the gesture to stop', async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (values: number[]) => values[0]);
+    const publish = vi.fn(), queue = new TransferQueue(request, publish, vi.fn());
+    for (let i = 1; i <= 60; i++) { queue.schedule([i]); await vi.advanceTimersByTimeAsync(16); }
+    // About one second of a 60 Hz drag: a trailing debounce issues zero requests here.
+    expect(request.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(publish).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(publish).toHaveBeenLastCalledWith(60);
+    queue.dispose();
+  });
+});
