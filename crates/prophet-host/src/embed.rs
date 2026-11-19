@@ -6,8 +6,8 @@
 //! - Linux X11/GTK3 (`GtkPlug` parented inside DAW X11 `Window`, or `GtkWindow` for Standalone),
 //!   using `libwebkit2gtk-4.1`/`4.0` when available at runtime or an interactive GTK3+Cairo canvas
 //!   fallback when WebKit2GTK is absent (e.g. headless CI / Xvfb).
-//! - Windows x64 (`HWND` child hosting Microsoft WebView2 COM runtime via `WebView2Loader.dll` with
-//!   offline `https://prophet.local/` asset interception, plus native GDI interactive fallback).
+//! - Windows x64 (`HWND` container hosting a Microsoft Edge WebView2 child through `wry`, serving the
+//!   embedded assets from the offline `http://prophet.localhost/` scheme, plus a GDI status fallback).
 //! - Android/macOS safe stubs (Android uses its own APK WebView + JNI bridge cleanly).
 
 use crate::{UiCommand, UiCommandReply, UiSnapshot};
@@ -265,6 +265,13 @@ impl EmbeddedEditorHandle {
     /// Runs a blocking event loop when hosting `ParentWindow::StandaloneWindow` without an
     /// outer GTK loop. Returns when the user closes the window or `stop_flag` turns `true`.
     pub fn pump_until_closed(&self, stop_flag: &std::sync::atomic::AtomicBool) {
+        // Windows windows are thread-affine: this thread created the standalone window, so it
+        // must dispatch its messages or the window is reported as "Not Responding".
+        #[cfg(target_os = "windows")]
+        if let Some(ref h) = self.inner {
+            h.pump_until_closed(stop_flag);
+            return;
+        }
         while self.is_open() && !stop_flag.load(std::sync::atomic::Ordering::Acquire) {
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
@@ -1904,21 +1911,41 @@ mod linux_gtk {
 // ============================================================================
 
 #[cfg(target_os = "windows")]
+// Win32 type names mirror the Windows SDK so the FFI declarations read like the documentation.
+#[allow(clippy::upper_case_acronyms)]
 mod windows_webview2 {
+    //! Win32 container window hosting a Microsoft Edge WebView2 child (through `wry`) that renders
+    //! the embedded React build. The container is a top-level window for the standalone app or a
+    //! child of the DAW's editor `HWND` for VST3/CLAP. When the WebView2 runtime is unavailable the
+    //! container falls back to a minimal GDI status view.
+    //!
+    //! Threading: Win32 windows and WebView2 are thread-affine. Everything below runs on the thread
+    //! that called [`spawn`]; the standalone pumps that thread with [`pump_until_closed`], while a
+    //! DAW pumps its own editor thread. `WebView` is `!Send`, so it lives in a thread-local registry
+    //! keyed by the container `HWND`.
     use super::{
         inject_bridge_into_html, native_bridge_bootstrap_script, resolve_embedded_asset,
         BridgeTransportMode, EditorViewConfig, EmbedError, HostBridgeSink, ParentWindow,
     };
     use crate::UiCommand;
-    use std::ffi::{c_char, c_int, c_void, OsStr};
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::ffi::{c_int, c_void, OsStr};
+    use std::num::NonZeroIsize;
     use std::os::windows::ffi::OsStrExt;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use wry::dpi::{PhysicalPosition, PhysicalSize};
+    use wry::http::{header::CONTENT_TYPE, Request, Response, StatusCode};
+    use wry::raw_window_handle::{
+        HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
+    };
+    use wry::{Rect, WebContext, WebView, WebViewBuilder};
 
     type HWND = *mut c_void;
     type HINSTANCE = *mut c_void;
-    type HMODULE = *mut c_void;
-    type HRESULT = i32;
     type WPARAM = usize;
     type LPARAM = isize;
     type LRESULT = isize;
@@ -1928,62 +1955,57 @@ mod windows_webview2 {
     const WS_VISIBLE: u32 = 0x1000_0000;
     const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
     const WS_CLIPCHILDREN: u32 = 0x0200_0000;
+    const CW_USEDEFAULT: c_int = 0x8000_0000_u32 as c_int;
     const WM_DESTROY: u32 = 0x0002;
+    const WM_SIZE: u32 = 0x0005;
     const WM_PAINT: u32 = 0x000F;
+    const WM_QUIT: u32 = 0x0012;
     const WM_TIMER: u32 = 0x0113;
     const WM_LBUTTONDOWN: u32 = 0x0201;
+    /// Drains replies queued by the WebView IPC handler outside of its callback.
+    const WM_APP_FLUSH: u32 = 0x8000 + 0x51;
+    const PM_REMOVE: u32 = 0x0001;
+    const QS_ALLINPUT: u32 = 0x04FF;
+    const MWMO_INPUTAVAILABLE: u32 = 0x0004;
+    const GWLP_USERDATA: c_int = -21;
+    const IDC_ARROW: usize = 32512;
+    const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x4;
+    const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 0x2;
     const TIMER_SNAPSHOT_ID: usize = 0x5012;
+    /// Telemetry push period to the React UI (~30 Hz, matching the Linux WebKit shell).
+    const SNAPSHOT_PERIOD_MS: u32 = 33;
+    /// Custom scheme serving `EMBEDDED_UI_ASSETS`; WebView2 exposes it as `http://prophet.localhost/`.
+    const ASSET_SCHEME: &str = "prophet";
+    const ASSET_ORIGIN: &str = "http://prophet.localhost";
 
     fn wide(s: &str) -> Vec<u16> {
         OsStr::new(s).encode_wide().chain(core::iter::once(0)).collect()
     }
 
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn LoadLibraryW(lp_lib_file_name: *const u16) -> HMODULE;
-        fn GetProcAddress(h_module: HMODULE, lp_proc_name: *const c_char) -> *mut c_void;
-        fn FreeLibrary(h_lib_module: HMODULE) -> BOOL;
-    }
-
-    struct WinDynLib {
-        module: HMODULE,
-    }
-
-    unsafe impl Send for WinDynLib {}
-    unsafe impl Sync for WinDynLib {}
-
-    impl WinDynLib {
-        unsafe fn open(name: &str) -> Option<Self> {
-            let w = wide(name);
-            let module = LoadLibraryW(w.as_ptr());
-            (!module.is_null()).then_some(Self { module })
-        }
-
-        unsafe fn get_raw(&self, nul_name: &[u8]) -> Option<*mut c_void> {
-            if nul_name.last().copied() != Some(0) {
-                return None;
-            }
-            let ptr = GetProcAddress(self.module, nul_name.as_ptr() as *const c_char);
-            (!ptr.is_null()).then_some(ptr)
-        }
-    }
-
-    impl Drop for WinDynLib {
-        fn drop(&mut self) {
-            if !self.module.is_null() {
-                unsafe {
-                    let _ = FreeLibrary(self.module);
-                }
-            }
-        }
-    }
-
     #[repr(C)]
+    #[derive(Default)]
     struct RECT {
         left: i32,
         top: i32,
         right: i32,
         bottom: i32,
+    }
+
+    #[repr(C)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+
+    #[repr(C)]
+    struct MSG {
+        hwnd: HWND,
+        message: u32,
+        w_param: WPARAM,
+        l_param: LPARAM,
+        time: u32,
+        pt: POINT,
+        l_private: u32,
     }
 
     #[repr(C)]
@@ -2010,6 +2032,11 @@ mod windows_webview2 {
         rgb_reserved: [u8; 32],
     }
 
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleExW(flags: u32, module_name: *const u16, module: *mut HINSTANCE) -> BOOL;
+    }
+
     #[link(name = "user32")]
     extern "system" {
         fn RegisterClassW(wc: *const WNDCLASSW) -> u16;
@@ -2029,7 +2056,17 @@ mod windows_webview2 {
         ) -> HWND;
         fn DestroyWindow(hwnd: HWND) -> BOOL;
         fn ShowWindow(hwnd: HWND, cmd_show: c_int) -> BOOL;
-        fn MoveWindow(hwnd: HWND, x: c_int, y: c_int, w: c_int, h: c_int, repaint: BOOL) -> BOOL;
+        fn UpdateWindow(hwnd: HWND) -> BOOL;
+        fn SetWindowPos(
+            hwnd: HWND,
+            insert_after: HWND,
+            x: c_int,
+            y: c_int,
+            cx: c_int,
+            cy: c_int,
+            flags: u32,
+        ) -> BOOL;
+        fn AdjustWindowRectEx(rect: *mut RECT, style: u32, menu: BOOL, ex_style: u32) -> BOOL;
         fn SetTimer(hwnd: HWND, id: usize, elapse: u32, func: *mut c_void) -> usize;
         fn KillTimer(hwnd: HWND, id: usize) -> BOOL;
         fn DefWindowProcW(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT;
@@ -2040,6 +2077,18 @@ mod windows_webview2 {
         fn InvalidateRect(hwnd: HWND, rect: *const RECT, erase: BOOL) -> BOOL;
         fn FillRect(hdc: *mut c_void, rect: *const RECT, hbr: *mut c_void) -> c_int;
         fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
+        fn LoadCursorW(instance: HINSTANCE, name: *const u16) -> *mut c_void;
+        fn PostMessageW(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> BOOL;
+        fn PeekMessageW(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> BOOL;
+        fn TranslateMessage(msg: *const MSG) -> BOOL;
+        fn DispatchMessageW(msg: *const MSG) -> LRESULT;
+        fn MsgWaitForMultipleObjectsEx(
+            count: u32,
+            handles: *const *mut c_void,
+            millis: u32,
+            wake_mask: u32,
+            flags: u32,
+        ) -> u32;
     }
 
     #[link(name = "gdi32")]
@@ -2051,61 +2100,300 @@ mod windows_webview2 {
         fn TextOutW(hdc: *mut c_void, x: c_int, y: c_int, text: *const u16, len: c_int) -> BOOL;
     }
 
-    // Minimal WebView2 loader signature checked dynamically so plugin loads cleanly without
-    // redistributing proprietary binaries when system Edge WebView2 or loader DLL is absent.
-    type FnCreateCoreWebView2Env = unsafe extern "system" fn(
-        *const u16,
-        *const u16,
-        *mut c_void,
-        *mut c_void,
-    ) -> HRESULT;
+    #[derive(serde::Deserialize)]
+    struct JsEnvelope {
+        #[serde(default)]
+        seq: u64,
+        cmd: serde_json::Value,
+    }
 
     struct WinViewState {
         sink: Arc<dyn HostBridgeSink>,
         hwnd: AtomicUsize,
         alive: AtomicBool,
         backend_tag: String,
+        /// Scripts produced by the IPC handler, evaluated on `WM_APP_FLUSH`.
+        outbox: Mutex<VecDeque<String>>,
+        webview_error: Mutex<Option<String>>,
     }
 
-    const GWLP_USERDATA: c_int = -21;
+    impl WinViewState {
+        fn hwnd(&self) -> HWND {
+            self.hwnd.load(Ordering::Acquire) as HWND
+        }
+        fn queue_script(&self, script: String) {
+            if let Ok(mut q) = self.outbox.lock() {
+                // Bound the queue: a stalled page must not grow host memory without limit.
+                if q.len() >= 256 {
+                    q.pop_front();
+                }
+                q.push_back(script);
+            }
+            let hwnd = self.hwnd();
+            if !hwnd.is_null() {
+                unsafe {
+                    PostMessageW(hwnd, WM_APP_FLUSH, 0, 0);
+                }
+            }
+        }
+    }
+
+    /// One live WebView per container window on this thread.
+    struct HostedView {
+        hwnd: usize,
+        webview: WebView,
+        _context: WebContext,
+    }
+
+    thread_local! {
+        static VIEWS: RefCell<Vec<HostedView>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn with_view(hwnd: HWND, f: impl FnOnce(&WebView)) {
+        VIEWS.with(|views| {
+            if let Ok(views) = views.try_borrow() {
+                if let Some(v) = views.iter().find(|v| v.hwnd == hwnd as usize) {
+                    f(&v.webview);
+                }
+            }
+        });
+    }
+
+    fn has_view(hwnd: HWND) -> bool {
+        let mut found = false;
+        with_view(hwnd, |_| found = true);
+        found
+    }
+
+    fn remove_view(hwnd: HWND) {
+        VIEWS.with(|views| {
+            if let Ok(mut views) = views.try_borrow_mut() {
+                views.retain(|v| v.hwnd != hwnd as usize);
+            }
+        });
+    }
+
+    struct ContainerHandle(HWND);
+
+    impl HasWindowHandle for ContainerHandle {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            let hwnd = NonZeroIsize::new(self.0 as isize).ok_or(HandleError::Unavailable)?;
+            let raw = RawWindowHandle::Win32(Win32WindowHandle::new(hwnd));
+            // SAFETY: the container HWND outlives the WebView, which is dropped on WM_DESTROY.
+            Ok(unsafe { WindowHandle::borrow_raw(raw) })
+        }
+    }
+
+    fn client_rect(hwnd: HWND) -> Rect {
+        let mut rc = RECT::default();
+        unsafe {
+            GetClientRect(hwnd, &mut rc);
+        }
+        Rect {
+            position: PhysicalPosition::new(0, 0).into(),
+            size: PhysicalSize::new((rc.right - rc.left).max(1) as u32, (rc.bottom - rc.top).max(1) as u32)
+                .into(),
+        }
+    }
+
+    fn snapshot_script(snapshot_json: &str) -> Option<String> {
+        let quoted = serde_json::to_string(snapshot_json).ok()?;
+        Some(format!(
+            "window.__PROPHET_HOST_RECEIVE__ && window.__PROPHET_HOST_RECEIVE__({quoted});"
+        ))
+    }
+
+    /// Writable per-user profile for WebView2. Its default sits next to the host executable,
+    /// which is read-only for DAWs installed under `Program Files`.
+    fn webview_data_dir() -> Option<PathBuf> {
+        let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+        let dir = base.join("PROPHET-XII").join("WebView2");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    }
+
+    fn asset_response(path: &str, index_html: &Arc<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+        let builder = Response::builder().header("Cache-Control", "no-store");
+        let trimmed = path.split(['?', '#']).next().unwrap_or("");
+        if trimmed.is_empty() || trimmed == "/" || trimmed == "/index.html" {
+            return builder
+                .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Cow::Owned(index_html.as_ref().clone()))
+                .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[][..])));
+        }
+        match resolve_embedded_asset(trimmed) {
+            Some(asset) if asset.path == "/index.html" => builder
+                .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Cow::Owned(index_html.as_ref().clone()))
+                .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[][..]))),
+            Some(asset) => builder
+                .header(CONTENT_TYPE, asset.mime)
+                .body(Cow::Borrowed(asset.bytes))
+                .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[][..]))),
+            None => builder
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Cow::Borrowed(&b"not found"[..]))
+                .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[][..]))),
+        }
+    }
+
+    /// Exact origin match: a prefix test would also accept `http://prophet.localhost.evil.com`.
+    fn is_embedded_origin(url: &str) -> bool {
+        url.strip_prefix(ASSET_ORIGIN)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    }
+
+    fn handle_ipc(state: &WinViewState, text: &str) {
+        let Ok(env) = serde_json::from_str::<JsEnvelope>(text) else {
+            return;
+        };
+        if env.cmd.get("type").and_then(|v| v.as_str()) == Some("__snapshot__") {
+            if let Some(script) = snapshot_script(&state.sink.snapshot_json()) {
+                state.queue_script(script);
+            }
+            return;
+        }
+        let reply = match serde_json::from_value::<UiCommand>(env.cmd) {
+            Ok(cmd) => state.sink.dispatch_command(cmd),
+            Err(e) => crate::UiCommandReply::err(
+                Some(prophet_control::port::Status::Invalid),
+                format!("Invalid UI command: {e}"),
+            ),
+        };
+        if env.seq > 0 {
+            if let Ok(reply_json) = serde_json::to_string(&reply) {
+                let quoted = serde_json::to_string(&reply_json).unwrap_or_else(|_| "\"{}\"".to_owned());
+                state.queue_script(format!(
+                    "window.__PROPHET_HOST_REPLY__ && window.__PROPHET_HOST_REPLY__({}, {quoted});",
+                    env.seq
+                ));
+            }
+        }
+    }
+
+    fn create_webview(hwnd: HWND, state: &Arc<WinViewState>) -> Result<(), String> {
+        let bootstrap =
+            native_bridge_bootstrap_script(&state.backend_tag, BridgeTransportMode::WebView2PostMessage);
+        let index = resolve_embedded_asset("/index.html")
+            .ok_or_else(|| "embedded index.html missing from build".to_owned())?;
+        let index_html = Arc::new(inject_bridge_into_html(index.bytes, &bootstrap));
+        let mut context = WebContext::new(webview_data_dir());
+        let ipc_state = Arc::clone(state);
+        let webview = WebViewBuilder::new_with_web_context(&mut context)
+            .with_custom_protocol(ASSET_SCHEME.to_owned(), move |_id, request: Request<Vec<u8>>| {
+                asset_response(request.uri().path(), &index_html)
+            })
+            .with_ipc_handler(move |request: Request<String>| {
+                // Accept only messages from the embedded origin, never from a navigated page.
+                if is_embedded_origin(&request.uri().to_string()) {
+                    handle_ipc(&ipc_state, request.body());
+                }
+            })
+            .with_navigation_handler(|url| is_embedded_origin(&url) || url == "about:blank")
+            .with_url(format!("{ASSET_ORIGIN}/index.html"))
+            .with_bounds(client_rect(hwnd))
+            .with_focused(true)
+            .build_as_child(&ContainerHandle(hwnd))
+            .map_err(|e| e.to_string())?;
+        VIEWS.with(|views| {
+            views.borrow_mut().push(HostedView {
+                hwnd: hwnd as usize,
+                webview,
+                _context: context,
+            })
+        });
+        Ok(())
+    }
+
+    unsafe fn paint_fallback(hwnd: HWND, st: Option<&WinViewState>) {
+        let mut ps: PAINTSTRUCT = core::mem::zeroed();
+        let hdc = BeginPaint(hwnd, &mut ps);
+        let mut rc = RECT::default();
+        GetClientRect(hwnd, &mut rc);
+        let bg = CreateSolidBrush(0x0015_1312);
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
+        if let Some(st) = st {
+            let snap = st.sink.capture_ui_state();
+            SetBkMode(hdc, 1);
+            SetTextColor(hdc, 0x009E_D6F5);
+            let reason = st
+                .webview_error
+                .lock()
+                .ok()
+                .and_then(|e| e.clone())
+                .unwrap_or_else(|| "WebView2 runtime unavailable".to_owned());
+            let lines = [
+                format!(
+                    "PROPHET-XII [{}] SR:{}Hz Lat:{}smp Reverb:{:?}",
+                    st.backend_tag,
+                    snap.engine_port.sample_rate,
+                    snap.engine_port.latency_samples,
+                    snap.engine_port.fx.algorithm
+                ),
+                format!("Fallback view: {reason}"),
+                "Install the Microsoft Edge WebView2 Runtime to load the full interface.".to_owned(),
+                "Click toggles reverb bypass.".to_owned(),
+            ];
+            for (i, line) in lines.iter().enumerate() {
+                let w = wide(line);
+                TextOutW(hdc, 24, 24 + 22 * i as c_int, w.as_ptr(), (w.len() - 1) as c_int);
+            }
+        }
+        EndPaint(hwnd, &ps);
+    }
 
     unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WinViewState;
+        let st = (!ptr.is_null()).then(|| &*ptr);
         match msg {
             WM_TIMER => {
-                if !ptr.is_null() {
-                    InvalidateRect(hwnd, core::ptr::null(), 0);
+                if let Some(st) = st {
+                    if has_view(hwnd) {
+                        if let Some(script) = snapshot_script(&st.sink.snapshot_json()) {
+                            with_view(hwnd, |v| {
+                                let _ = v.evaluate_script(&script);
+                            });
+                        }
+                    } else {
+                        InvalidateRect(hwnd, core::ptr::null(), 0);
+                    }
                 }
+                0
+            }
+            WM_APP_FLUSH => {
+                if let Some(st) = st {
+                    let scripts: Vec<String> = st
+                        .outbox
+                        .lock()
+                        .map(|mut q| q.drain(..).collect())
+                        .unwrap_or_default();
+                    with_view(hwnd, |v| {
+                        for s in &scripts {
+                            let _ = v.evaluate_script(s);
+                        }
+                    });
+                }
+                0
+            }
+            WM_SIZE => {
+                let rect = client_rect(hwnd);
+                with_view(hwnd, |v| {
+                    let _ = v.set_bounds(rect);
+                });
                 0
             }
             WM_PAINT => {
-                let mut ps: PAINTSTRUCT = core::mem::zeroed();
-                let hdc = BeginPaint(hwnd, &mut ps);
-                let mut rc = RECT { left: 0, top: 0, right: 800, bottom: 500 };
-                GetClientRect(hwnd, &mut rc);
-                let bg = CreateSolidBrush(0x00121315);
-                FillRect(hdc, &rc, bg);
-                DeleteObject(bg);
-                if !ptr.is_null() {
-                    let st = &*ptr;
-                    let snap = st.sink.capture_ui_state();
-                    SetBkMode(hdc, 1);
-                    SetTextColor(hdc, 0x009ED6F5);
-                    let line = wide(&format!(
-                        "PROPHET-XII [{}] SR:{}Hz Lat:{}smp Reverb:{:?}",
-                        st.backend_tag,
-                        snap.engine_port.sample_rate,
-                        snap.engine_port.latency_samples,
-                        snap.engine_port.fx.algorithm
-                    ));
-                    TextOutW(hdc, 24, 24, line.as_ptr(), (line.len() - 1) as c_int);
+                if has_view(hwnd) {
+                    DefWindowProcW(hwnd, msg, wp, lp)
+                } else {
+                    paint_fallback(hwnd, st);
+                    0
                 }
-                EndPaint(hwnd, &ps);
-                0
             }
-            WM_LBUTTONDOWN => {
-                if !ptr.is_null() {
-                    let st = &*ptr;
+            WM_LBUTTONDOWN if !has_view(hwnd) => {
+                if let Some(st) = st {
                     let cur = st.sink.capture_ui_state().reverb_bypass_effective;
                     let _ = st.sink.dispatch_command(UiCommand::SetReverb {
                         algorithm: None,
@@ -2117,9 +2405,11 @@ mod windows_webview2 {
             }
             WM_DESTROY => {
                 KillTimer(hwnd, TIMER_SNAPSHOT_ID);
+                remove_view(hwnd);
                 if !ptr.is_null() {
                     let st = &*ptr;
                     st.alive.store(false, Ordering::Release);
+                    st.hwnd.store(0, Ordering::Release);
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     drop(Arc::from_raw(ptr));
                 }
@@ -2131,7 +2421,6 @@ mod windows_webview2 {
 
     pub struct WindowsEditorHandle {
         state: Arc<WinViewState>,
-        webview_loader: Option<WinDynLib>,
         kind: &'static str,
     }
 
@@ -2145,12 +2434,32 @@ mod windows_webview2 {
         }
 
         pub fn resize(&self, w: u32, h: u32, scale: f32) {
-            let hwnd = self.state.hwnd.load(Ordering::Acquire) as HWND;
+            let hwnd = self.state.hwnd();
             if !hwnd.is_null() && self.is_open() {
                 let pw = ((w as f32) * scale.max(0.5)).round() as c_int;
                 let ph = ((h as f32) * scale.max(0.5)).round() as c_int;
+                // SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
                 unsafe {
-                    MoveWindow(hwnd, 0, 0, pw, ph, 1);
+                    SetWindowPos(hwnd, core::ptr::null_mut(), 0, 0, pw, ph, 0x0002 | 0x0004 | 0x0010);
+                }
+            }
+        }
+
+        /// Win32 message loop for the standalone window; returns once it is closed or `stop_flag`
+        /// is raised. Plugins never call this: the DAW owns the editor thread's loop.
+        pub fn pump_until_closed(&self, stop_flag: &AtomicBool) {
+            let mut msg: MSG = unsafe { core::mem::zeroed() };
+            while self.is_open() && !stop_flag.load(Ordering::Acquire) {
+                unsafe {
+                    while PeekMessageW(&mut msg, core::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                        if msg.message == WM_QUIT {
+                            return;
+                        }
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                    // Wake on input or every 16 ms to observe `stop_flag`.
+                    MsgWaitForMultipleObjectsEx(0, core::ptr::null(), 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
                 }
             }
         }
@@ -2166,8 +2475,19 @@ mod windows_webview2 {
                     DestroyWindow(hwnd);
                 }
             }
-            let _ = &self.webview_loader;
         }
+    }
+
+    fn this_module() -> HINSTANCE {
+        let mut module: HINSTANCE = core::ptr::null_mut();
+        unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                wnd_proc as *const () as *const u16,
+                &mut module,
+            );
+        }
+        module
     }
 
     pub fn spawn(
@@ -2175,24 +2495,27 @@ mod windows_webview2 {
         config: EditorViewConfig,
         sink: Arc<dyn HostBridgeSink>,
     ) -> Result<WindowsEditorHandle, EmbedError> {
+        let instance = this_module();
         let class_name = wide("ProphetXiiEmbedWndClass");
         let wc = WNDCLASSW {
             style: 0,
             lpfn_wnd_proc: Some(wnd_proc),
             cb_cls_extra: 0,
             cb_wnd_extra: 0,
-            h_instance: core::ptr::null_mut(),
+            h_instance: instance,
             h_icon: core::ptr::null_mut(),
-            h_cursor: core::ptr::null_mut(),
+            h_cursor: unsafe { LoadCursorW(core::ptr::null_mut(), IDC_ARROW as *const u16) },
             hbr_background: core::ptr::null_mut(),
             lpsz_menu_name: core::ptr::null(),
             lpsz_class_name: class_name.as_ptr(),
         };
+        // Fails harmlessly when the class already exists (a second editor or instance).
         unsafe { RegisterClassW(&wc) };
 
+        let standalone = matches!(parent, ParentWindow::StandaloneWindow);
         let (parent_hwnd, style) = match parent {
             ParentWindow::Win32(h) => (h, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN),
-            ParentWindow::StandaloneWindow => (core::ptr::null_mut(), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN),
+            ParentWindow::StandaloneWindow => (core::ptr::null_mut(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN),
             _ => {
                 return Err(EmbedError {
                     message: "Unsupported window handle variant on Windows".to_owned(),
@@ -2202,6 +2525,16 @@ mod windows_webview2 {
 
         let pw = ((config.logical_width as f32) * config.scale_factor.max(0.5)).round() as c_int;
         let ph = ((config.logical_height as f32) * config.scale_factor.max(0.5)).round() as c_int;
+        // The requested size is the client area; grow the frame around it for top-level windows.
+        let (x, y, ww, wh) = if standalone {
+            let mut rc = RECT { left: 0, top: 0, right: pw, bottom: ph };
+            unsafe {
+                AdjustWindowRectEx(&mut rc, style, 0, 0);
+            }
+            (CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top)
+        } else {
+            (0, 0, pw, ph)
+        };
         let title_w = wide(&config.title);
         let hwnd = unsafe {
             CreateWindowExW(
@@ -2209,13 +2542,13 @@ mod windows_webview2 {
                 class_name.as_ptr(),
                 title_w.as_ptr(),
                 style,
-                0,
-                0,
-                pw,
-                ph,
+                x,
+                y,
+                ww,
+                wh,
                 parent_hwnd,
                 core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                instance,
                 core::ptr::null_mut(),
             )
         };
@@ -2230,38 +2563,78 @@ mod windows_webview2 {
             hwnd: AtomicUsize::new(hwnd as usize),
             alive: AtomicBool::new(true),
             backend_tag: config.backend_tag,
+            outbox: Mutex::new(VecDeque::new()),
+            webview_error: Mutex::new(None),
         });
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Arc::into_raw(state.clone()) as isize);
-            SetTimer(hwnd, TIMER_SNAPSHOT_ID, 33, core::ptr::null_mut());
-            ShowWindow(hwnd, 5);
         }
 
-        // Probe optional WebView2Loader.dll alongside offline assets cleanly.
-        let webview_loader = unsafe { WinDynLib::open("WebView2Loader.dll") };
-        let has_wv2 = webview_loader
-            .as_ref()
-            .and_then(|l| unsafe { l.get_raw(b"CreateCoreWebView2EnvironmentWithOptions\0") })
-            .map(|p| unsafe {
-                let _: FnCreateCoreWebView2Env = core::mem::transmute_copy(&p);
-            })
-            .is_some();
-        let _ = (
-            resolve_embedded_asset,
-            inject_bridge_into_html,
-            native_bridge_bootstrap_script,
-            BridgeTransportMode::WebView2PostMessage,
-        );
-
-        Ok(WindowsEditorHandle {
-            state,
-            webview_loader,
-            kind: if has_wv2 {
-                "windows-hwnd-webview2-ready"
-            } else {
+        let kind = match create_webview(hwnd, &state) {
+            Ok(()) => "windows-webview2",
+            Err(e) => {
+                eprintln!("PROPHET-XII: WebView2 unavailable, using GDI fallback: {e}");
+                if let Ok(mut slot) = state.webview_error.lock() {
+                    *slot = Some(e);
+                }
                 "windows-win32-gdi"
-            },
-        })
+            }
+        };
+        unsafe {
+            SetTimer(hwnd, TIMER_SNAPSHOT_ID, SNAPSHOT_PERIOD_MS, core::ptr::null_mut());
+            ShowWindow(hwnd, 5);
+            UpdateWindow(hwnd);
+        }
+        Ok(WindowsEditorHandle { state, kind })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn index() -> Arc<Vec<u8>> {
+            let bootstrap = native_bridge_bootstrap_script("test", BridgeTransportMode::WebView2PostMessage);
+            Arc::new(inject_bridge_into_html(
+                resolve_embedded_asset("/index.html").unwrap().bytes,
+                &bootstrap,
+            ))
+        }
+
+        #[test]
+        fn index_is_served_with_the_webview2_bridge_injected() {
+            for path in ["/", "/index.html", ""] {
+                let r = asset_response(path, &index());
+                assert_eq!(r.status(), StatusCode::OK);
+                assert!(r.headers()[CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+                let body = String::from_utf8_lossy(r.body());
+                assert!(body.contains("window.chrome.webview.postMessage"), "{path}");
+                assert!(body.contains("__PROPHET_HOST__"));
+            }
+        }
+
+        #[test]
+        fn bundle_assets_keep_their_mime_and_unknown_paths_are_404() {
+            let asset = EMBEDDED_UI_ASSETS_FOR_TEST
+                .iter()
+                .find(|a| a.path.ends_with(".js"))
+                .expect("embedded JS bundle");
+            let r = asset_response(asset.path, &index());
+            assert_eq!(r.status(), StatusCode::OK);
+            assert_eq!(r.headers()[CONTENT_TYPE], asset.mime);
+            assert_eq!(r.body().as_ref(), asset.bytes);
+            assert_eq!(asset_response("/missing.js", &index()).status(), StatusCode::NOT_FOUND);
+        }
+
+        #[test]
+        fn only_the_embedded_origin_reaches_the_host_bridge() {
+            assert!(is_embedded_origin("http://prophet.localhost/index.html"));
+            assert!(is_embedded_origin("http://prophet.localhost"));
+            assert!(!is_embedded_origin("http://prophet.localhost.evil.com/index.html"));
+            assert!(!is_embedded_origin("https://example.com/"));
+            assert!(!is_embedded_origin("http://prophet.localhostx/"));
+        }
+
+        use super::super::EMBEDDED_UI_ASSETS as EMBEDDED_UI_ASSETS_FOR_TEST;
     }
 }
 
