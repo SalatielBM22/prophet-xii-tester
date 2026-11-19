@@ -284,6 +284,71 @@ async fn filter_response(
     }
 }
 
+fn miss_json(m: &Option<prophet_standalone::MissRecord>) -> serde_json::Value {
+    match m {
+        Some(m) => serde_json::json!({
+            "atMs": m.at_ns as f64 / 1e6,
+            "frames": m.frames,
+            "processingUs": m.processing_ns as f64 / 1000.,
+            "intervalUs": m.interval_ns as f64 / 1000.,
+            "activeVoices": m.active_voices,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Whole-session timing: percentiles are over every callback since start,
+/// unlike the 128-callback `p95Us`/`p99Us` window.
+fn session_json(s: &prophet_standalone::SessionTiming) -> serde_json::Value {
+    serde_json::json!({
+        "callbacks": s.callbacks,
+        "loadP50Pct": s.load_percentile(0.5),
+        "loadP95Pct": s.load_percentile(0.95),
+        "loadP99Pct": s.load_percentile(0.99),
+        "loadMaxPct": s.load_percentile(1.0),
+        "bucketPct": prophet_standalone::LOAD_BUCKET_PCT,
+        "deadlineMisses": s.deadline_misses(),
+        "missesWithVoices": s.misses_with_voices,
+        "missesIdle": s.misses_idle,
+        "lateWakeups": s.late_wakeups,
+        "framesMin": s.frames_min,
+        "framesMax": s.frames_max,
+        "firstMiss": miss_json(&s.first_miss),
+        "lastMiss": miss_json(&s.last_miss),
+        "worstMiss": miss_json(&s.worst_miss),
+    })
+}
+
+const TIMING_LOG_HEADER: &str = "elapsed_s,callback_frames,frames_min,frames_max,processing_us,interval_us,dsp_ema_pct,window_p95_us,window_p99_us,window_max_us,session_p95_pct,session_p99_pct,session_max_pct,deadline_misses,misses_with_voices,misses_idle,late_wakeups,active_voices,device_errors";
+
+/// One CSV row per relayed telemetry frame, written off the audio thread.
+fn timing_log_row(m: &serde_json::Value, t: &Telemetry, device_errors: u64) -> String {
+    let c = &m["callback"];
+    let s = &t.session;
+    format!(
+        "{:.3},{},{},{},{:.1},{:.1},{:.2},{},{},{},{},{},{},{},{},{},{},{},{}",
+        t.monotonic_ns as f64 / 1e9,
+        t.callback_frames,
+        s.frames_min,
+        s.frames_max,
+        t.processing_ns as f64 / 1000.,
+        t.callback_interval_ns as f64 / 1000.,
+        t.cpu,
+        c["p95Us"],
+        c["p99Us"],
+        c["maxUs"],
+        s.load_percentile(0.95),
+        s.load_percentile(0.99),
+        s.load_percentile(1.0),
+        s.deadline_misses(),
+        s.misses_with_voices,
+        s.misses_idle,
+        s.late_wakeups,
+        t.kernel.active_voice_mask.count_ones(),
+        device_errors,
+    )
+}
+
 fn wire(t: &Telemetry, device_errors: u64) -> String {
     let envelope = |e: &prophet_dsp::env_cem3310::EnvelopeTelemetry| {
         serde_json::json!({
@@ -319,7 +384,7 @@ fn wire(t: &Telemetry, device_errors: u64) -> String {
         "revision":t.revision,"parameterCommandIds":t.parameter_command_ids.as_slice(),"sequence":t.sequence,"monotonicNs":t.monotonic_ns,
         "midiLearn":{"active":t.learn_active,"target":if (t.learn_target as usize)<NUM_PARAMS {Some(t.learn_target)}else{None},"ccMap":t.cc_map.iter().map(|v|if (*v as usize)<NUM_PARAMS{Some(*v)}else{None}).collect::<Vec<_>>()},
         "reverb":{"enabled":t.reverb_enabled,"tail":if t.reverb_kill{"kill"}else{"spill"},"dormant":t.reverb_dormant,"enableGain":t.reverb_enable_gain},
-        "callback":{"frames":t.callback_frames,"processingUs":t.processing_ns as f64/1000.,"intervalUs":t.callback_interval_ns as f64/1000.,"meanUs":mean,"p50Us":q(0.5),"p95Us":q(0.95),"p99Us":q(0.99),"maxUs":q(1.),"window":times.len(),"backendBufferedUs":t.backend_buffered_ns.map(|n|n as f64/1000.),"invalid":t.invalid_callbacks},
+        "callback":{"frames":t.callback_frames,"processingUs":t.processing_ns as f64/1000.,"intervalUs":t.callback_interval_ns as f64/1000.,"meanUs":mean,"p50Us":q(0.5),"p95Us":q(0.95),"p99Us":q(0.99),"maxUs":q(1.),"window":times.len(),"backendBufferedUs":t.backend_buffered_ns.map(|n|n as f64/1000.),"invalid":t.invalid_callbacks,"session":session_json(&t.session)},
         "control":{"lastAppliedCommandId":t.last_command_id,"appliedFrame":t.applied_frame,"waitUs":t.control_wait_us,"relayWaitUs":t.relay_wait_us,"rtQueueWaitUs":t.rt_queue_wait_us,"queueDepth":t.queue_depth,"peakQueueDepth":t.peak_queue_depth},
         "captureDroppedChunks":t.dropped_capture
     }).to_string()
@@ -594,6 +659,7 @@ fn print_help() {
             "  --buffer-frames N     Audio callback block size in frames (default: 256 when supported)\n",
             "  --demo                Trigger an initial demo chord on startup\n",
             "  --duration SECONDS    Run for SECONDS then exit cleanly\n",
+            "  --timing-log FILE     Write per-telemetry callback timing CSV (with --http-dev/--bind)\n",
             "  --null                Use software null-sink audio clock (explicit test mode, no audio device)\n",
             "  --help                Print this help message\n\n",
             "Security: Binding to a non-loopback address requires PROPHET_CONTROL_TOKEN (>= 16 chars)."
@@ -1031,7 +1097,18 @@ fn run_http_dev_mode(
     midi_port: Option<usize>,
     demo: bool,
     duration: Option<u64>,
+    timing_log: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
+    let mut timing_log = match timing_log {
+        Some(path) => {
+            use std::io::Write;
+            let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+            writeln!(file, "{TIMING_LOG_HEADER}")?;
+            println!("  Timing:  {}", path.display());
+            Some(file)
+        }
+        None => None,
+    };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -1100,6 +1177,14 @@ fn run_http_dev_mode(
                             message["control"]["ingressDrops"]=overflowed.into();
                             message["control"]["hardwareMidiDrops"]=midi_drops_relay.load(Ordering::Relaxed).into();
                             message["control"]["lastDroppedCommandId"]=last_dropped.into();
+                            if let Some(log) = timing_log.as_mut() {
+                                use std::io::Write;
+                                let row = timing_log_row(&message, &t, error_count.load(Ordering::Relaxed));
+                                if writeln!(log, "{row}").and_then(|_| log.flush()).is_err() {
+                                    eprintln!("timing log write failed; disabling it");
+                                    timing_log = None;
+                                }
+                            }
                             wire_tx.send_replace(message.to_string());
                         }
                         let mut blocks=Vec::new();
@@ -1354,6 +1439,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             midi_port,
             has("--demo"),
             duration,
+            val("--timing-log").map(PathBuf::from),
         );
     }
 
